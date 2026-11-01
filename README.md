@@ -59,7 +59,13 @@ the expected setup.
 
 ## PAPA and cadwork
 
-The desktop app has two hand-over buttons. Set the program paths in the config:
+The desktop app has two hand-over buttons. They find the programs on their own
+(`src/programs.rs`): the path in the config if set, else the program picked
+before, else the installed programs (Windows uninstall entries) and the usual
+folders (`C:\cadwork\v*\ci.exe`, the newest version; a folder named PAPA under
+Program Files). When nothing is found, the app asks for the program file once
+and keeps it in `%APPDATA%\aufmass\programme.toml`. A path in the config always
+wins, e.g. to correct a wrong pick:
 
 ```toml
 [papa]

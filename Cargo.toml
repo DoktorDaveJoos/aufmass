@@ -18,6 +18,10 @@ ureq = { version = "3", default-features = false, features = ["native-tls", "jso
 zip = { version = "9", default-features = false, features = ["deflate-flate2-zlib-rs"] }
 zipsign-api = { version = "0.2", default-features = false, features = ["verify-zip"] }
 
+# Finds PAPA and cadwork among the installed programs.
+[target.'cfg(windows)'.dependencies]
+winreg = "0.56"
+
 [workspace]
 members = [".", "app"]
 

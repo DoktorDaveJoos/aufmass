@@ -8,7 +8,7 @@ pub const PLUGIN_NAME: &str = "Aufmass_Import";
 const PLUGIN: &str = include_str!("../cadwork/Aufmass_Import/Aufmass_Import.py");
 
 /// `%APPDATA%\aufmass` (elsewhere `~/.config/aufmass`), shared with the plugin.
-fn app_data() -> Option<PathBuf> {
+pub(crate) fn app_data() -> Option<PathBuf> {
     std::env::var_os("APPDATA")
         .map(PathBuf::from)
         .or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".config")))

@@ -6,6 +6,7 @@ mod scene;
 
 use aufmass::model::{Kind, OpeningKind};
 use aufmass::report::{self, de};
+use aufmass::programs::{self, Program};
 use aufmass::{collect_inputs, convert_with_progress, default_out, telemetry, update, Config, Conversion, FileReport, GAEB_FILE};
 use gpui::prelude::FluentBuilder;
 use gpui::{
@@ -56,7 +57,8 @@ struct Done {
     /// Rasterized plan preview per storey.
     plans: Vec<(String, Option<Arc<RenderImage>>)>,
     scene: Arc<Scene>,
-    /// Programs from the config, for "In PAPA öffnen" and "In cadwork öffnen".
+    /// Programs from the config, for "In PAPA öffnen" and "In cadwork öffnen";
+    /// without one they are looked for, or the user picks them.
     papa: Option<PathBuf>,
     cadwork: Option<PathBuf>,
 }
@@ -151,13 +153,61 @@ impl Converter {
         cx.notify();
     }
 
+    /// Finds the program, or asks for it when it can't be found.
+    fn open_program(&mut self, program: Program, cx: &mut Context<Self>) {
+        let State::Done(done) = &self.state else { return };
+        let configured = match program {
+            Program::Papa => done.papa.clone(),
+            Program::Cadwork => done.cadwork.clone(),
+        };
+        match programs::find(program, configured.as_deref()) {
+            Some(exe) => self.open_in(program, Some(exe), cx),
+            None => self.pick_program(program, cx),
+        }
+    }
+
+    /// Lets the user show where the program is; it is kept for the next time.
+    fn pick_program(&mut self, program: Program, cx: &mut Context<Self>) {
+        let name = program.name();
+        self.notice = Some(format!("{name} wurde nicht gefunden. Bitte das Programm auswählen ({}), Aufmaß merkt es sich.", program.exe_hint()));
+        cx.notify();
+        let picked = cx.prompt_for_paths(PathPromptOptions {
+            files: true,
+            directories: false,
+            multiple: false,
+            prompt: Some(format!("{name} auswählen").into()),
+        });
+        cx.spawn(async move |this, cx| {
+            let exe = match picked.await {
+                Ok(Ok(Some(mut paths))) => paths.pop(),
+                _ => None,
+            };
+            let saved = exe.as_ref().map(|e| programs::remember(program, e));
+            this.update(cx, |this, cx| {
+                this.open_in(program, exe, cx);
+                if let (Some(Err(e)), Some(notice)) = (saved, &mut this.notice) {
+                    notice.push_str(&format!(" Die Auswahl konnte nicht gespeichert werden: {e:#}"));
+                }
+            })
+            .ok();
+        })
+        .detach();
+    }
+
+    fn open_in(&mut self, program: Program, exe: Option<PathBuf>, cx: &mut Context<Self>) {
+        match program {
+            Program::Papa => self.open_in_papa(exe, cx),
+            Program::Cadwork => self.open_in_cadwork(exe, cx),
+        }
+    }
+
     /// Starts PAPA and puts the GAEB file path on the clipboard; PAPA has no
     /// way to be handed a file to import, so the user pastes it in the GAEB import.
-    fn open_in_papa(&mut self, cx: &mut Context<Self>) {
+    fn open_in_papa(&mut self, exe: Option<PathBuf>, cx: &mut Context<Self>) {
         let State::Done(done) = &self.state else { return };
         let file = done.out.join(GAEB_FILE);
         cx.write_to_clipboard(ClipboardItem::new_string(file.display().to_string()));
-        let started = done.papa.as_ref().map(|exe| launch(exe, "PAPA"));
+        let started = exe.map(|exe| launch(&exe, "PAPA"));
         self.notice = Some(match started {
             Some(Ok(_)) => "PAPA startet. Der Pfad zu mengen.x83 ist kopiert: in PAPA das Projekt öffnen, GAEB-Import wählen und den Pfad einfügen (Strg+V).".into(),
             Some(Err(e)) => {
@@ -166,7 +216,7 @@ impl Converter {
             }
             None => {
                 cx.reveal_path(&file);
-                "Kein PAPA-Programm eingetragen (aufmass.toml, [papa] path). Der Ordner mit mengen.x83 ist geöffnet, der Pfad kopiert.".into()
+                "Kein PAPA-Programm ausgewählt. Der Ordner mit mengen.x83 ist geöffnet, der Pfad kopiert.".into()
             }
         });
         cx.notify();
@@ -174,7 +224,7 @@ impl Converter {
 
     /// Installs the import plugin into cadwork and starts cadwork; the plugin
     /// picks up this result on its own, so the user only runs it there.
-    fn open_in_cadwork(&mut self, cx: &mut Context<Self>) {
+    fn open_in_cadwork(&mut self, exe: Option<PathBuf>, cx: &mut Context<Self>) {
         let State::Done(done) = &self.state else { return };
         let plugin = aufmass::cadwork::PLUGIN_NAME;
         let manual = if aufmass::cadwork::install_plugin().is_empty() {
@@ -191,10 +241,10 @@ impl Converter {
             String::new()
         };
         let run = format!("In cadwork eine 3D-Datei öffnen und im Plugin-Menü „{plugin}“ wählen, die Auswertung wird übernommen.");
-        self.notice = Some(match done.cadwork.as_ref().map(|exe| launch(exe, "cadwork")) {
+        self.notice = Some(match exe.map(|exe| launch(&exe, "cadwork")) {
             Some(Ok(())) => format!("cadwork startet. {run}{manual}"),
             Some(Err(e)) => format!("{e} {run}{manual}"),
-            None => format!("Kein cadwork-Programm eingetragen (aufmass.toml, [cadwork] path). {run}{manual}"),
+            None => format!("Kein cadwork-Programm ausgewählt. {run}{manual}"),
         });
         cx.notify();
     }
@@ -378,8 +428,8 @@ impl Converter {
                     .gap_2()
                     .when_some(done, |row, out| {
                         let xlsx = out.join("mengen.xlsx");
-                        row.child(button("open-papa", "In PAPA öffnen", true).on_click(cx.listener(|this, _, _, cx| this.open_in_papa(cx))))
-                            .child(button("open-cadwork", "In cadwork öffnen", true).on_click(cx.listener(|this, _, _, cx| this.open_in_cadwork(cx))))
+                        row.child(button("open-papa", "In PAPA öffnen", true).on_click(cx.listener(|this, _, _, cx| this.open_program(Program::Papa, cx))))
+                            .child(button("open-cadwork", "In cadwork öffnen", true).on_click(cx.listener(|this, _, _, cx| this.open_program(Program::Cadwork, cx))))
                             .child(button("open-xlsx", "Excel öffnen", false).on_click(cx.listener(move |_, _, _, cx| cx.open_with_system(&xlsx))))
                             .child(button("reveal", "Ordner zeigen", false).on_click(cx.listener(move |_, _, _, cx| cx.reveal_path(&out))))
                     })

@@ -9,6 +9,7 @@ pub mod config;
 pub mod gaeb;
 pub mod geom;
 pub mod model;
+pub mod programs;
 pub mod report;
 pub mod svg;
 pub mod telemetry;

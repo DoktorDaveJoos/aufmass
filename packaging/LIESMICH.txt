@@ -30,7 +30,12 @@ Benutzung
 
 PAPA und cadwork
 ----------------
-aufmass.toml mit dem Editor öffnen und die Programme eintragen, z. B.:
+Aufmaß sucht PAPA und cadwork selbst. Findet es ein Programm nicht, öffnet
+sich beim ersten Klick ein Fenster: dort das Programm auswählen (PAPA.exe bzw.
+ci.exe im cadwork-Ordner, z. B. C:\cadwork\v30). Aufmaß merkt es sich.
+
+Wurde das falsche Programm gewählt, den Pfad in aufmass.toml eintragen, er
+hat immer Vorrang:
 
   [papa]
   path = 'C:\Programme\PAPA\PAPA.exe'

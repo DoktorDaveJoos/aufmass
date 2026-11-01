@@ -51,7 +51,8 @@ thickness = 0.18
 name = "BSP-Decke"
 
 # Programs the app starts for "In PAPA öffnen" and "In cadwork öffnen".
-# Without a path the app only opens the result folder.
+# Usually not needed: the app finds them, or asks once for the program file.
+# A path here always wins.
 [papa]
 # path = 'C:\Programme\PAPA\PAPA.exe'
 
