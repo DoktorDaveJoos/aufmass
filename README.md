@@ -38,6 +38,11 @@ from 2D lines:
    - **Slab**: largest horizontal face. Flat, large solids only; furniture and
      stairs drawn on the same layer are skipped.
    - **Roof**: largest sloped face, with pitch.
+
+   Volumes are those of the solids themselves, so a knee wall cut by the roof
+   or a roof plate with plumb-cut eaves is not counted as a full box. Subtotals
+   per element type show count and volume only: the layers of one build-up are
+   separate rows, so adding their areas would count the same wall twice.
 4. Solids standing on hatches of an "existing" color (grey in this office's
    plans), and everything touching them, are skipped as existing buildings.
    Solids repeated in several files (site plan) are counted once.

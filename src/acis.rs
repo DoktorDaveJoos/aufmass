@@ -33,6 +33,23 @@ impl Body {
         }
         self
     }
+
+    /// Enclosed volume (divergence theorem). The loops of a closed shell all run
+    /// the same way round the solid, so their signed tetrahedra add up to the
+    /// volume. Measured from the vertex mean to keep world coordinates out of the
+    /// rounding.
+    pub fn volume(&self) -> f64 {
+        let n = self.vertices().count().max(1) as f64;
+        let c = self.vertices().fold(V3::default(), |a, p| a + *p) * (1.0 / n);
+        let mut v = 0.0;
+        for l in self.faces.iter().flat_map(|f| &f.loops) {
+            let p0 = l[0] - c;
+            for w in l[1..].windows(2) {
+                v += p0.dot((w[0] - c).cross(w[1] - c));
+            }
+        }
+        (v / 6.0).abs()
+    }
 }
 
 pub fn bodies(doc: &SatDocument) -> Vec<Body> {
@@ -162,5 +179,42 @@ impl Transform {
             (p.x * r[1] + p.y * r[4] + p.z * r[7]) * self.s + self.t[1],
             (p.x * r[2] + p.y * r[5] + p.z * r[8]) * self.s + self.t[2],
         )
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The loops (outer and holes) extruded by `d`, as a closed body.
+    fn prism(base: &[Vec<V3>], d: V3) -> Body {
+        let mut faces = vec![
+            Face { loops: base.iter().map(|l| l.iter().rev().copied().collect()).collect() },
+            Face { loops: base.iter().map(|l| l.iter().map(|p| *p + d).collect()).collect() },
+        ];
+        for l in base {
+            for (i, &a) in l.iter().enumerate() {
+                let b = l[(i + 1) % l.len()];
+                faces.push(Face { loops: vec![vec![a, b, b + d, a + d]] });
+            }
+        }
+        Body { faces }
+    }
+
+    #[test]
+    fn volume_of_a_slab_with_a_hole() {
+        let o = V3::new(1000.0, 2000.0, 3.0);
+        let outer = [(0.0, 0.0), (4.0, 0.0), (4.0, 3.0), (0.0, 3.0)].map(|(x, y)| o + V3::new(x, y, 0.0)).to_vec();
+        let hole = [(1.0, 1.0), (1.0, 2.0), (2.0, 2.0), (2.0, 1.0)].map(|(x, y)| o + V3::new(x, y, 0.0)).to_vec();
+        let v = prism(&[outer, hole], V3::new(0.0, 0.0, 0.2)).volume();
+        assert!((v - 2.2).abs() < 1e-9, "{v}");
+    }
+
+    #[test]
+    fn volume_of_a_knee_wall_cut_by_the_roof() {
+        // 36.5 cm thick, 1.569 m high outside, 1.252 m inside, 10 m long
+        let profile = [(0.0, 0.0), (0.365, 0.0), (0.365, 1.252), (0.0, 1.569)].map(|(y, z)| V3::new(0.0, y, z)).to_vec();
+        let v = prism(&[profile], V3::new(10.0, 0.0, 0.0)).volume();
+        assert!((v - 10.0 * 0.365 * (1.252 + 1.569) / 2.0).abs() < 1e-9, "{v}");
     }
 }

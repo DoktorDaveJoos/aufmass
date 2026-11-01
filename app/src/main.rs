@@ -568,7 +568,8 @@ impl Converter {
     }
 }
 
-/// One line of the quantity list; `total` lines are bold with a rule above.
+/// One line of the quantity list; `total` lines are bold and leave the area
+/// empty, see [`report::subtotal`].
 fn quantity_row(name: String, t: &report::Sum, total: bool) -> impl IntoElement {
     div()
         .flex()
@@ -578,7 +579,7 @@ fn quantity_row(name: String, t: &report::Sum, total: bool) -> impl IntoElement 
         .when(total, |d| d.font_weight(FontWeight::SEMIBOLD))
         .child(div().flex_1().min_w_0().child(name))
         .child(div().w(px(36.)).text_right().when(!total, |d| d.text_color(rgb(MUTED))).child(t.count.to_string()))
-        .child(div().w(px(88.)).text_right().child(format!("{} m²", de(t.net, 2))))
+        .child(div().w(px(88.)).text_right().when(!total, |d| d.child(format!("{} m²", de(t.net, 2)))))
         .child(div().w(px(70.)).text_right().when(!total, |d| d.text_color(rgb(MUTED))).child(format!("{} m³", de(t.volume, 2))))
 }
 

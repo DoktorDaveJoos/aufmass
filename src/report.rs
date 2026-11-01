@@ -38,15 +38,16 @@ pub fn totals<'a>(storeys: impl IntoIterator<Item = &'a Storey>) -> Totals {
     m
 }
 
-/// Sum of all rows of one element type.
+/// Sum of all rows of one element type. Only count and volume are meaningful:
+/// the layers of one build-up (frame and cladding, slab and screed) are rows of
+/// their own, so their areas would count the same wall or floor twice.
 pub fn subtotal(rows: &Totals, kind: Kind) -> Sum {
     let mut s = Sum::default();
     rows.iter().filter(|((k, _), _)| *k == kind).for_each(|(_, t)| s.add(t));
     s
 }
 
-/// Sum of all rows. Only count and volume are meaningful: wall, slab and roof
-/// areas do not add up to anything a price is based on.
+/// Sum of all rows. Only count and volume are meaningful, as for [`subtotal`].
 pub fn grand_total(rows: &Totals) -> Sum {
     let mut s = Sum::default();
     rows.values().for_each(|t| s.add(t));
@@ -76,6 +77,7 @@ pub fn print_summary(b: &Building) {
             t.count, de(t.net, 2), de(t.openings, 2), de(t.volume, 2)
         )
     };
+    let total = |name: &str, t: &Sum| println!("{:<7} {name:<28} {:>6} {:>13} {:>13} {:>8} m³", "", t.count, "", "", de(t.volume, 2));
     println!("\n{:<7} {:<28} {:>6} {:>13} {:>13} {:>11}", "Bauteil", "Bezeichnung", "Anzahl", "Fläche netto", "Öffnungen", "Volumen");
     for kind in Kind::ALL {
         let mut group = rows.iter().filter(|((k, _), _)| *k == kind).peekable();
@@ -85,11 +87,10 @@ pub fn print_summary(b: &Building) {
         for ((_, name), t) in group {
             line(kind.label(), name, t);
         }
-        line("", &format!("Summe {}", kind.plural()), &subtotal(&rows, kind));
+        total(&format!("Summe {}", kind.plural()), &subtotal(&rows, kind));
         println!();
     }
-    let all = grand_total(&rows);
-    println!("{:<7} {:<28} {:>6} {:>13} {:>13} {:>8} m³", "", "Gesamt", all.count, "", "", de(all.volume, 2));
+    total("Gesamt", &grand_total(&rows));
     let openings: Vec<_> = b.storeys.iter().flat_map(|s| s.elements.iter().flat_map(|e| &e.openings)).collect();
     let count = |k: OpeningKind| openings.iter().filter(|o| o.kind == k).count();
     println!(
@@ -216,7 +217,7 @@ pub fn write_xlsx(b: &Building, path: &Path) -> Result<()> {
 /// (the storey). Returns the last row written.
 fn summary_block(ws: &mut Worksheet, mut row: u32, lead: &[&str], rows: &Totals, total: &str, f: &Formats) -> Result<u32> {
     let c = lead.len() as u16;
-    let mut put = |row: u32, kind: &str, name: &str, t: &Sum, sub: bool, areas: bool| -> Result<()> {
+    let mut put = |row: u32, kind: &str, name: &str, t: &Sum, sub: bool| -> Result<()> {
         let (text, num) = if sub { (&f.bold, &f.bold_num) } else { (&f.plain, &f.num) };
         for (i, l) in lead.iter().enumerate() {
             ws.write_string_with_format(row, i as u16, *l, text)?;
@@ -224,7 +225,7 @@ fn summary_block(ws: &mut Worksheet, mut row: u32, lead: &[&str], rows: &Totals,
         ws.write_string_with_format(row, c, kind, text)?;
         ws.write_string_with_format(row, c + 1, name, text)?;
         ws.write_number_with_format(row, c + 2, t.count as f64, text)?;
-        if areas {
+        if !sub {
             ws.write_number_with_format(row, c + 3, t.net, num)?;
             ws.write_number_with_format(row, c + 4, t.openings, num)?;
         }
@@ -235,16 +236,16 @@ fn summary_block(ws: &mut Worksheet, mut row: u32, lead: &[&str], rows: &Totals,
         let mut any = false;
         for ((_, name), t) in rows.iter().filter(|((k, _), _)| *k == kind) {
             row += 1;
-            put(row, kind.label(), name, t, false, true)?;
+            put(row, kind.label(), name, t, false)?;
             any = true;
         }
         if any {
             row += 1;
-            put(row, "", &format!("Summe {}", kind.plural()), &subtotal(rows, kind), true, true)?;
+            put(row, "", &format!("Summe {}", kind.plural()), &subtotal(rows, kind), true)?;
         }
     }
     row += 1;
-    put(row, "", total, &grand_total(rows), true, false)?;
+    put(row, "", total, &grand_total(rows), true)?;
     Ok(row)
 }
 
