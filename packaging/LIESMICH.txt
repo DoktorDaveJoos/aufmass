@@ -65,6 +65,13 @@ Version gibt es auch hier:
 https://github.com/DoktorDaveJoos/aufmass/releases/latest
 
 
+Lizenz
+------
+Aufmaß ist urheberrechtlich geschützt (bauzertifikate.de, alle Rechte
+vorbehalten). Die Programme dürfen unverändert genutzt, aber nicht
+weitergegeben, verändert oder nachgebaut werden. Details: LICENSE.
+
+
 Fehlerberichte
 --------------
 Stürzt Aufmaß ab oder kann Pläne nicht auswerten, schickt es einen kurzen

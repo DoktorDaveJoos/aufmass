@@ -1,0 +1,80 @@
+Aufmaß – Proprietary License
+
+Copyright (c) 2026 bauzertifikate.de. All rights reserved.
+
+This repository, its source code, documentation, configuration files, assets
+and all programs built from it (together, the "Software") are the property of
+bauzertifikate.de and are protected by copyright law. The Software is not open
+source. Making the source code visible does not grant any licence to it.
+
+
+1. What you may do
+
+   You may download the unmodified program files that bauzertifikate.de
+   publishes on this repository's GitHub Releases page (the "Released
+   Programs") and run them on your own computers, for private or professional
+   use, including installing the updates the Released Programs offer.
+
+   Nothing else is permitted, except where mandatory law explicitly allows it.
+
+
+2. What you may not do
+
+   Without prior written permission from bauzertifikate.de you may not:
+
+   a) copy, download, clone, store or reproduce the source code or any part
+      of it, beyond the viewing on GitHub that GitHub's Terms of Service allow;
+   b) modify, translate, adapt or create derivative works of the Software;
+   c) build, compile or package the Software yourself, or run programs built
+      by anyone other than bauzertifikate.de;
+   d) distribute, publish, sell, rent, lend, sublicense or otherwise make the
+      Software or the Released Programs available to others, including by
+      hosting, mirroring or re-uploading them; point others to the official
+      Releases page instead;
+   e) reverse engineer, decompile or disassemble the Released Programs, except
+      to the extent § 69e UrhG or other mandatory law permits it;
+   f) remove or alter copyright notices, this licence, or the update and
+      signature checks of the Released Programs;
+   g) use the Software or any part of it to develop, train or evaluate other
+      software, including machine learning and AI models.
+
+
+3. Forks
+
+   Forking this repository on GitHub, as GitHub's Terms of Service allow, does
+   not grant any of the rights in section 2. A fork may not be modified, built,
+   used or distributed.
+
+
+4. Termination
+
+   Any breach of this licence ends your right to use the Software
+   immediately and without notice. You must then delete all copies of the
+   Software and the Released Programs in your possession.
+
+
+5. No warranty
+
+   The Released Programs are provided free of charge and "as is", without any
+   warranty, express or implied, including fitness for a particular purpose.
+   Quantities, areas, volumes and files produced by the Software must be
+   checked by the user before they are relied on, for example for offers,
+   orders or invoices.
+
+
+6. Liability
+
+   bauzertifikate.de is liable without limitation only for intent and gross
+   negligence, for injury to life, body or health, and under the German
+   Product Liability Act (Produkthaftungsgesetz). Any other liability is
+   excluded to the extent permitted by law.
+
+
+7. Governing law
+
+   This licence is governed by the laws of the Federal Republic of Germany,
+   excluding the UN Convention on Contracts for the International Sale of
+   Goods. If any provision is invalid, the remaining provisions stay in effect.
+
+
+Permission requests: bauzertifikate.de

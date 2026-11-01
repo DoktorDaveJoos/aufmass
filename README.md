@@ -184,3 +184,10 @@ have to be replaced once by hand.
 cargo test --workspace
 cargo run --release -- ~/Downloads/Planeingang_17.09.2026 -o /tmp/out
 ```
+
+## License
+
+Proprietary, all rights reserved by bauzertifikate.de; see [LICENSE](LICENSE).
+The source is visible but may not be copied, modified, built or distributed.
+Anyone may run the unmodified programs from the Releases page. The release
+zips include the LICENSE file.
