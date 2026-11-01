@@ -155,8 +155,8 @@ private key in base64) and publishes them as a GitHub Release. The file names
 never change, so this link always gives the newest Windows version:
 `https://github.com/DoktorDaveJoos/aufmass/releases/latest/download/aufmass-windows-x64.zip`.
 
-The app checks the latest release on start (release builds only) and offers
-the update in a bar; `aufmass --update` does the same from the command line
+The app checks the latest release on start (release builds only; debug builds
+ask a test server given as `AUFMASS_RELEASES_API`) and offers the update in a bar; `aufmass --update` does the same from the command line
 (`src/update.rs`). The zip's signature must match `packaging/update-key.pub`,
 with the file name and version as context, so neither a tampered zip nor an
 older release under a new tag gets installed. Both programs, LIESMICH.txt and,

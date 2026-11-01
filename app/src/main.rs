@@ -814,8 +814,9 @@ fn main() {
                         _update_task: None,
                     };
                     view.start(paths, cx);
-                    // Development builds would offer to replace themselves with the release.
-                    if !cfg!(debug_assertions) {
+                    // Development builds would offer to replace themselves with the
+                    // release; they only check a test server (AUFMASS_RELEASES_API).
+                    if !cfg!(debug_assertions) || std::env::var_os("AUFMASS_RELEASES_API").is_some() {
                         view.check_for_update(cx);
                     }
                     view
