@@ -3,10 +3,13 @@
 # Windows binaries have to be built on Windows; this runs both side by side.
 name: Build
 
-# Manual only (Actions tab -> Build -> Run workflow), so a push never starts
-# the slow Windows build.
+# By hand (Actions tab -> Build -> Run workflow) for a test build, or by
+# pushing a tag vX.Y.Z, which also publishes a release. Ordinary pushes never
+# start the slow Windows build.
 on:
   workflow_dispatch:
+  push:
+    tags: ["v*"]
 
 jobs:
   build:
@@ -28,6 +31,18 @@ jobs:
       SENTRY_PROJECT: ${{ vars.SENTRY_PROJECT }}
     steps:
       - uses: actions/checkout@v4
+
+      # The updater compares the tag with the version compiled in.
+      - name: Check the tag matches Cargo.toml
+        if: startsWith(github.ref, 'refs/tags/')
+        shell: bash
+        run: |
+          version=$(grep -m1 '^version = ' Cargo.toml | cut -d'"' -f2)
+          if [ "v$version" != "$GITHUB_REF_NAME" ]; then
+            echo "::error::Tag $GITHUB_REF_NAME, but Cargo.toml has version $version"
+            exit 1
+          fi
+
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
 
@@ -62,3 +77,49 @@ jobs:
         with:
           name: ${{ matrix.artifact }}
           path: dist/
+
+  # Zips each platform, signs the zips for the updater and publishes them as a
+  # GitHub Release. The names stay the same in every release, so
+  # releases/latest/download/aufmass-windows-x64.zip always points at the newest.
+  release:
+    if: startsWith(github.ref, 'refs/tags/')
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+
+      - name: Install zipsign
+        run: cargo install zipsign --version 0.2.2 --locked
+
+      # ZIPSIGN_KEY: the private key from `zipsign gen-key`, base64 encoded.
+      # The context (file name and version) must match src/update.rs.
+      - name: Zip and sign
+        env:
+          ZIPSIGN_KEY: ${{ secrets.ZIPSIGN_KEY }}
+        run: |
+          if [ -z "$ZIPSIGN_KEY" ]; then
+            echo "::error::Secret ZIPSIGN_KEY is missing"
+            exit 1
+          fi
+          version="${GITHUB_REF_NAME#v}"
+          key="$RUNNER_TEMP/update.key"
+          echo "$ZIPSIGN_KEY" | base64 -d > "$key"
+          # Artifacts lose the executable bit.
+          chmod +x dist/aufmass-macos-arm64/aufmass dist/aufmass-macos-arm64/aufmass-app
+          for platform in aufmass-macos-arm64 aufmass-windows-x64; do
+            (cd "dist/$platform" && zip -X "../../$platform.zip" *)
+            zipsign sign zip -c "$platform.zip $version" "$platform.zip" "$key"
+            # Fails if the secret doesn't belong to packaging/update-key.pub.
+            zipsign verify zip -c "$platform.zip $version" "$platform.zip" packaging/update-key.pub
+          done
+          rm "$key"
+
+      - name: Publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release create "$GITHUB_REF_NAME" aufmass-macos-arm64.zip aufmass-windows-x64.zip --title "Aufmaß ${GITHUB_REF_NAME#v}" --generate-notes

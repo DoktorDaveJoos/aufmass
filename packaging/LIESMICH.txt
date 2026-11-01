@@ -56,6 +56,15 @@ aufmass.toml je Büro ist normal.
 aufmass.exe ist die Kommandozeilen-Version mit denselben Ergebnissen.
 
 
+Updates
+-------
+Ist eine neue Version verfügbar, zeigt Aufmaß beim Start oben einen Hinweis.
+„Jetzt aktualisieren“ lädt sie, prüft die Signatur und ersetzt die Programme;
+danach „Neu starten“. Die eigene aufmass.toml bleibt erhalten. Die neueste
+Version gibt es auch hier:
+https://github.com/DoktorDaveJoos/aufmass/releases/latest
+
+
 Fehlerberichte
 --------------
 Stürzt Aufmaß ab oder kann Pläne nicht auswerten, schickt es einen kurzen

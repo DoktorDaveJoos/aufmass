@@ -6,7 +6,7 @@ mod scene;
 
 use aufmass::model::{Kind, OpeningKind};
 use aufmass::report::{self, de};
-use aufmass::{collect_inputs, convert, default_out, telemetry, Config, Conversion, FileReport, GAEB_FILE};
+use aufmass::{collect_inputs, convert, default_out, telemetry, update, Config, Conversion, FileReport, GAEB_FILE};
 use gpui::prelude::FluentBuilder;
 use gpui::{
     actions, canvas, div, ClipboardItem, img, point, px, rgb, size, App, AppContext, Application, Bounds, Context, Corners, ExternalPaths,
@@ -56,6 +56,14 @@ struct Done {
     cadwork: Option<PathBuf>,
 }
 
+/// A newer release on GitHub, shown in a bar under the header.
+enum AppUpdate {
+    Available(update::Release),
+    Installing(String),
+    Installed { version: String, exe: PathBuf },
+    Failed(String),
+}
+
 #[derive(Clone, Copy, PartialEq)]
 enum Tab {
     Model,
@@ -74,7 +82,9 @@ struct Converter {
     notice: Option<String>,
     /// Tab to show after the first conversion (`--tab` on the command line).
     initial_tab: Option<String>,
+    app_update: Option<AppUpdate>,
     _task: Option<Task<()>>,
+    _update_task: Option<Task<()>>,
 }
 
 impl Converter {
@@ -155,6 +165,52 @@ impl Converter {
         cx.notify();
     }
 
+    fn check_for_update(&mut self, cx: &mut Context<Self>) {
+        let job = cx.background_executor().spawn(async { update::check() });
+        self._update_task = Some(cx.spawn(async move |this, cx| {
+            // Offline or GitHub unreachable: asked again on the next start.
+            if let Ok(Some(release)) = job.await {
+                this.update(cx, |this, cx| {
+                    this.app_update = Some(AppUpdate::Available(release));
+                    cx.notify();
+                })
+                .ok();
+            }
+        }));
+    }
+
+    fn install_update(&mut self, cx: &mut Context<Self>) {
+        let Some(AppUpdate::Available(release)) = self.app_update.take() else { return };
+        self.app_update = Some(AppUpdate::Installing(release.version.clone()));
+        let job = cx.background_executor().spawn(async move { (update::install(&release), release.version) });
+        self._update_task = Some(cx.spawn(async move |this, cx| {
+            let (result, version) = job.await;
+            this.update(cx, |this, cx| {
+                this.app_update = Some(match result {
+                    Ok(exe) => AppUpdate::Installed { version, exe },
+                    Err(e) => {
+                        telemetry::update_failed(&e);
+                        AppUpdate::Failed(format!("Update auf {version} fehlgeschlagen: {e:#}"))
+                    }
+                });
+                cx.notify();
+            })
+            .ok();
+        }));
+        cx.notify();
+    }
+
+    /// Starts the new version and closes this one; the results are saved already.
+    fn restart(&mut self, exe: PathBuf, cx: &mut Context<Self>) {
+        match std::process::Command::new(&exe).spawn() {
+            Ok(_) => cx.quit(),
+            Err(e) => {
+                self.app_update = Some(AppUpdate::Failed(format!("Aufmaß konnte nicht neu gestartet werden: {e}. Bitte von Hand neu starten.")));
+                cx.notify();
+            }
+        }
+    }
+
     fn choose(&mut self, directories: bool, cx: &mut Context<Self>) {
         let picked = cx.prompt_for_paths(PathPromptOptions {
             files: !directories,
@@ -233,6 +289,7 @@ impl Render for Converter {
             .on_drop(cx.listener(|this, paths: &ExternalPaths, _, cx| this.start(paths.paths().to_vec(), cx)))
             .drag_over::<ExternalPaths>(|style, _, _, _| style.bg(rgb(ACCENT_SOFT)))
             .child(self.header(cx))
+            .when_some(self.update_bar(cx), |d, bar| d.child(bar))
             .when_some(self.notice.clone(), |d, notice| {
                 d.child(
                     div()
@@ -287,6 +344,30 @@ impl Converter {
                     .child(button("pick-dir", "Ordner wählen …", false).on_click(cx.listener(|this, _, _, cx| this.choose(true, cx))))
                     .child(button("pick-files", "Dateien wählen …", false).on_click(cx.listener(|this, _, _, cx| this.choose(false, cx)))),
             )
+    }
+
+    fn update_bar(&self, cx: &mut Context<Self>) -> Option<impl IntoElement> {
+        let bar = div().flex().items_center().gap_3().px_4().py_2().bg(rgb(ACCENT_SOFT)).border_b_1().border_color(rgb(BORDER));
+        let dismiss = || {
+            div().id("dismiss-update").text_color(rgb(MUTED)).cursor_pointer().child("✕").on_click(cx.listener(|this, _, _, cx| {
+                this.app_update = None;
+                cx.notify();
+            }))
+        };
+        Some(match self.app_update.as_ref()? {
+            AppUpdate::Available(release) => bar
+                .child(div().flex_1().child(format!("Aufmaß {} ist verfügbar (installiert: {}).", release.version, update::VERSION)))
+                .child(button("install-update", "Jetzt aktualisieren", true).on_click(cx.listener(|this, _, _, cx| this.install_update(cx))))
+                .child(dismiss()),
+            AppUpdate::Installing(version) => bar.child(div().flex_1().text_color(rgb(MUTED)).child(format!("Aufmaß {version} wird geladen …"))),
+            AppUpdate::Installed { version, exe } => {
+                let exe = exe.clone();
+                bar.child(div().flex_1().child(format!("Aufmaß {version} ist installiert und startet nach einem Neustart.")))
+                    .child(button("restart", "Neu starten", true).on_click(cx.listener(move |this, _, _, cx| this.restart(exe.clone(), cx))))
+                    .child(dismiss())
+            }
+            AppUpdate::Failed(message) => bar.child(div().flex_1().text_color(rgb(DANGER)).child(message.clone())).child(dismiss()),
+        })
     }
 
     fn empty(&self, cx: &mut Context<Self>) -> impl IntoElement {
@@ -728,9 +809,15 @@ fn main() {
                         summary_storey: None,
                         notice: None,
                         initial_tab,
+                        app_update: None,
                         _task: None,
+                        _update_task: None,
                     };
                     view.start(paths, cx);
+                    // Development builds would offer to replace themselves with the release.
+                    if !cfg!(debug_assertions) {
+                        view.check_for_update(cx);
+                    }
                     view
                 })
             },

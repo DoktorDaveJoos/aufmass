@@ -73,6 +73,18 @@ pub fn conversion(files: &[FileReport], failure: Option<&anyhow::Error>) {
     sentry::capture_event(event);
 }
 
+/// Reports an update that could not be installed.
+pub fn update_failed(e: &anyhow::Error) {
+    let mut event = Event {
+        level: Level::Warning,
+        message: Some(format!("{e:#}")),
+        fingerprint: vec!["update".into(), scrub(&e.to_string()).into()].into(),
+        ..Default::default()
+    };
+    event.tags.insert("update".into(), "failed".into());
+    sentry::capture_event(event);
+}
+
 fn scrub_event(e: &mut Event<'static>) {
     e.server_name = None;
     e.user = None;

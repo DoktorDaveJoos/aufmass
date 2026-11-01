@@ -12,6 +12,7 @@ pub mod model;
 pub mod report;
 pub mod svg;
 pub mod telemetry;
+pub mod update;
 
 pub use config::Config;
 

@@ -1,6 +1,6 @@
 [package]
 name = "aufmass-app"
-version = "0.1.0"
+version.workspace = true
 edition = "2024"
 description = "Desktop app for Aufmaß: drop architect plans, get quantities, plans and a 3D preview"
 

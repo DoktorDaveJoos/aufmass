@@ -130,8 +130,8 @@ small HTTP server that prints the envelopes).
 ## Builds
 
 `.github/workflows/build.yml` builds and tests both binaries on macOS and
-Windows and uploads them with `aufmass.toml` as artifacts. It runs only when
-started by hand (Actions -> Build -> Run workflow). Secrets `SENTRY_DSN` and
+Windows and uploads them with `aufmass.toml` as artifacts. It runs when
+started by hand (Actions -> Build -> Run workflow) or for a release tag. Secrets `SENTRY_DSN` and
 `SENTRY_AUTH_TOKEN` and variables `SENTRY_ORG` and `SENTRY_PROJECT` turn on
 error reports and the upload of debug symbols (.pdb/.dSYM) to Sentry. The Windows build has
 to run on Windows, because GPUI compiles its DirectX shaders with the Windows
@@ -139,6 +139,44 @@ SDK. On macOS the app uses GPUI's `runtime_shaders`, so no Xcode Metal
 toolchain is needed to build it. `.cargo/config.toml` links the C runtime
 statically on Windows, so the .exe needs no Visual C++ Redistributable. The
 package includes `packaging/LIESMICH.txt`, a German quick start for users.
+
+## Releases and updates
+
+A release is the version in `Cargo.toml` (`[workspace.package]`, shared by
+both binaries) plus a matching tag:
+
+```bash
+git tag v0.2.0 && git push origin v0.2.0
+```
+
+The build then zips each platform, signs the zips with
+[zipsign](https://github.com/Kijewski/zipsign) (secret `ZIPSIGN_KEY`, the
+private key in base64) and publishes them as a GitHub Release. The file names
+never change, so this link always gives the newest Windows version:
+`https://github.com/DoktorDaveJoos/aufmass/releases/latest/download/aufmass-windows-x64.zip`.
+
+The app checks the latest release on start (release builds only) and offers
+the update in a bar; `aufmass --update` does the same from the command line
+(`src/update.rs`). The zip's signature must match `packaging/update-key.pub`,
+with the file name and version as context, so neither a tampered zip nor an
+older release under a new tag gets installed. Both programs, LIESMICH.txt and,
+when missing, aufmass.toml are replaced; an existing aufmass.toml is kept.
+Downloads by the program itself carry no "from the internet" mark, so
+SmartScreen only warns on the first install.
+
+GitHub serves releases only from public repositories. `AUFMASS_RELEASES=owner/name`
+at build time points the updater at another repository, e.g. a public one
+holding only the releases.
+
+The private key is not in the repository. To set up a new one:
+
+```bash
+zipsign gen-key update-signing.key packaging/update-key.pub
+base64 -i update-signing.key | gh secret set ZIPSIGN_KEY
+```
+
+A new key means the installed programs reject updates signed with it: they
+have to be replaced once by hand.
 
 ## Development
 
