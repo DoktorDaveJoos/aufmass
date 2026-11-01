@@ -218,10 +218,13 @@ mod tests {
     fn picked_programs_are_kept_apart() {
         let root = temp("store");
         let file = root.join("programme.toml");
-        remember_in(&file, Program::Papa, Path::new("/x/PAPA.exe")).unwrap();
-        remember_in(&file, Program::Cadwork, Path::new("/y/ci.exe")).unwrap();
-        assert_eq!(remembered_in(&file, Program::Papa), Some(PathBuf::from("/x/PAPA.exe")));
-        assert_eq!(remembered_in(&file, Program::Cadwork), Some(PathBuf::from("/y/ci.exe")));
+        // Absolute on every platform, e.g. C:\x\PAPA.exe on Windows.
+        let papa = root.join("x").join("PAPA.exe");
+        let cadwork = root.join("y").join("ci.exe");
+        remember_in(&file, Program::Papa, &papa).unwrap();
+        remember_in(&file, Program::Cadwork, &cadwork).unwrap();
+        assert_eq!(remembered_in(&file, Program::Papa), Some(papa));
+        assert_eq!(remembered_in(&file, Program::Cadwork), Some(cadwork));
         std::fs::remove_dir_all(&root).ok();
     }
 }
