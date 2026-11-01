@@ -19,3 +19,8 @@ resvg = "0.45"
 # Compile the Metal shaders at startup, so building needs no Xcode Metal toolchain.
 [target.'cfg(target_os = "macos")'.dependencies]
 gpui = { version = "=0.2.2", features = ["runtime_shaders"] }
+# Sets the Dock icon; a bare binary has no app bundle to take it from.
+objc = "0.2.7"
+
+[build-dependencies]
+embed-resource = "3"

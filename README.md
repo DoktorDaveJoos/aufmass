@@ -115,6 +115,11 @@ cargo run --release -p aufmass-app -- ~/Downloads/Planeingang_17.09.2026 --tab E
 
 `--tab <storey>` opens that plan tab after loading, for quick checks.
 
+The app icon is the A of Inter SemiBold drawn as a measured part on blueprint
+paper. `app/assets/icon.py` writes `icon.svg` and `icon-small.svg` (16 to 32
+px); `icon.ico` (embedded into the .exe by `app/build.rs`) and
+`icon-macos.png` (the Dock icon) are rendered from them, see the script.
+
 ## Error reports
 
 Both binaries report crashes and failed conversions (no 3D model, unreadable

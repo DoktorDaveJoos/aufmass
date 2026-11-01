@@ -6,10 +6,10 @@ mod scene;
 
 use aufmass::model::{Kind, OpeningKind};
 use aufmass::report::{self, de};
-use aufmass::{collect_inputs, convert, default_out, telemetry, update, Config, Conversion, FileReport, GAEB_FILE};
+use aufmass::{collect_inputs, convert_with_progress, default_out, telemetry, update, Config, Conversion, FileReport, GAEB_FILE};
 use gpui::prelude::FluentBuilder;
 use gpui::{
-    actions, canvas, div, ClipboardItem, img, point, px, rgb, size, App, AppContext, Application, Bounds, Context, Corners, ExternalPaths,
+    actions, canvas, div, relative, Animation, AnimationExt, ClipboardItem, img, point, px, rgb, size, App, AppContext, Application, Bounds, Context, Corners, ExternalPaths,
     FontWeight, Image, ImageFormat, InteractiveElement, IntoElement, KeyBinding, Menu, MenuItem, MouseButton,
     MouseDownEvent, MouseMoveEvent, ParentElement, PathPromptOptions, Pixels, Point, Render, RenderImage,
     ScrollWheelEvent, SharedString, StatefulInteractiveElement, Styled, Task, TitlebarOptions,
@@ -17,7 +17,8 @@ use gpui::{
 };
 use scene::{Camera, Scene, Visibility};
 use std::path::PathBuf;
-use std::sync::{Arc, OnceLock};
+use std::sync::{Arc, Mutex, OnceLock};
+use std::time::Duration;
 
 actions!(aufmass, [Quit]);
 
@@ -38,9 +39,13 @@ const DANGER: u32 = 0xb42318;
 /// The bauzertifikate.de mark, upright, about 2:3.
 const MARK: &str = include_str!("../assets/mark.svg");
 
+/// The Dock icon, rendered from assets/icon.svg with macOS's icon margin.
+#[cfg(target_os = "macos")]
+const DOCK_ICON: &[u8] = include_bytes!("../assets/icon-macos.png");
+
 enum State {
     Empty,
-    Working(String),
+    Working(Arc<Mutex<Progress>>),
     Failed { message: String, files: Vec<String> },
     Done(Box<Done>),
 }
@@ -54,6 +59,24 @@ struct Done {
     /// Programs from the config, for "In PAPA öffnen" and "In cadwork öffnen".
     papa: Option<PathBuf>,
     cadwork: Option<PathBuf>,
+}
+
+/// What the background conversion is doing, written by it and shown while it runs.
+struct Progress {
+    step: String,
+    /// E.g. "Plan 2 von 5".
+    detail: Option<String>,
+    /// Steps finished of `total`: one per plan file, saving and the previews.
+    done: usize,
+    total: usize,
+}
+
+impl Progress {
+    fn set(&mut self, step: impl Into<String>, detail: Option<String>, done: usize) {
+        self.step = step.into();
+        self.detail = detail;
+        self.done = done;
+    }
 }
 
 /// A newer release on GitHub, shown in a bar under the header.
@@ -84,6 +107,7 @@ struct Converter {
     initial_tab: Option<String>,
     app_update: Option<AppUpdate>,
     _task: Option<Task<()>>,
+    _progress_task: Option<Task<()>>,
     _update_task: Option<Task<()>>,
 }
 
@@ -92,11 +116,21 @@ impl Converter {
         if paths.is_empty() {
             return;
         }
-        let names: Vec<String> =
-            paths.iter().map(|p| p.file_name().unwrap_or_default().to_string_lossy().into_owned()).collect();
-        self.state = State::Working(format!("Lese {} …", names.join(", ")));
+        let progress = Arc::new(Mutex::new(Progress { step: "Pläne werden gesucht …".into(), detail: None, done: 0, total: 1 }));
+        self.state = State::Working(progress.clone());
         self.notice = None;
-        let job = cx.background_executor().spawn(async move { run(paths) });
+        let job = cx.background_executor().spawn(async move { run(paths, &progress) });
+        // The conversion cannot notify the view from its thread; redraw until it is done.
+        self._progress_task = Some(cx.spawn(async move |this, cx| loop {
+            cx.background_executor().timer(Duration::from_millis(100)).await;
+            let working = this.update(cx, |this, cx| {
+                cx.notify();
+                matches!(this.state, State::Working(_))
+            });
+            if !matches!(working, Ok(true)) {
+                break;
+            }
+        }));
         self._task = Some(cx.spawn(async move |this, cx| {
             let state = job.await;
             this.update(cx, |this, cx| {
@@ -237,7 +271,8 @@ fn launch(exe: &std::path::Path, name: &str) -> Result<(), String> {
 }
 
 /// Runs on a background thread: read, classify, write outputs, prepare previews.
-fn run(paths: Vec<PathBuf>) -> State {
+fn run(paths: Vec<PathBuf>, progress: &Mutex<Progress>) -> State {
+    let report = |step: String, detail: Option<String>, done: usize| progress.lock().unwrap().set(step, detail, done);
     let fail = |e: anyhow::Error, files: Vec<String>| State::Failed { message: format!("{e:#}"), files };
     let cfg = match Config::load(None) {
         Ok(c) => c,
@@ -249,18 +284,25 @@ fn run(paths: Vec<PathBuf>) -> State {
     };
     let out = default_out(&paths[0]);
     telemetry::set_folders(&paths, &out);
-    let conversion = convert(&files, &cfg);
+    let n = files.len();
+    progress.lock().unwrap().total = n + 2;
+    let conversion = convert_with_progress(&files, &cfg, |i, file| {
+        let name = file.file_name().unwrap_or_default().to_string_lossy();
+        report(format!("Lese {name} …"), (n > 1).then(|| format!("Plan {} von {n}", i + 1)), i);
+    });
     let lines: Vec<String> = conversion.files.iter().map(FileReport::line).collect();
     if let Err(e) = conversion.check() {
         telemetry::conversion(&conversion.files, Some(&e));
         return fail(e, lines);
     }
+    report("Ergebnisse werden gespeichert …".into(), Some(format!("mengen.xlsx und {GAEB_FILE}")), n);
     if let Err(e) = conversion.write(&out) {
         let e = e.context("Ergebnis konnte nicht gespeichert werden");
         telemetry::conversion(&conversion.files, Some(&e));
         return fail(e, lines);
     }
     telemetry::conversion(&conversion.files, None);
+    report("Vorschau wird vorbereitet …".into(), Some("Grundrisse und 3D-Modell".into()), n + 1);
     let plans = conversion
         .building
         .storeys
@@ -275,7 +317,7 @@ impl Render for Converter {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let body = match &self.state {
             State::Empty => self.empty(cx).into_any_element(),
-            State::Working(msg) => centered(div().text_color(rgb(MUTED)).child(msg.clone())).into_any_element(),
+            State::Working(progress) => working(&progress.lock().unwrap()).into_any_element(),
             State::Failed { message, files } => self.failed(message, files, cx).into_any_element(),
             State::Done(done) => self.done(done, cx).into_any_element(),
         };
@@ -502,7 +544,7 @@ impl Converter {
                 div()
                     .flex()
                     .items_center()
-                    .gap_2()
+                    .gap(px(8.))
                     .px_3()
                     .py_2()
                     .children(toggles)
@@ -510,11 +552,11 @@ impl Converter {
                         this.visibility.roof = !this.visibility.roof;
                         cx.notify();
                     })))
-                    .child(button("reset-view", "Ansicht zurücksetzen", false).on_click(cx.listener(|this, _, _, cx| {
+                    .child(button("reset-view", "Ansicht zurücksetzen", false).h(px(TOGGLE_HEIGHT)).py_0().flex().items_center().text_xs().on_click(cx.listener(|this, _, _, cx| {
                         this.camera = Camera::default();
                         cx.notify();
                     })))
-                    .child(div().ml_auto().text_xs().text_color(rgb(MUTED)).child("Ziehen: drehen · Scrollen: zoomen")),
+                    .child(div().flex_1().flex().justify_end().text_xs().text_color(rgb(MUTED)).child("Ziehen: drehen · Scrollen: zoomen")),
             )
             .child(
                 div()
@@ -568,7 +610,7 @@ impl Converter {
         let total = report::grand_total(&rows);
         let filter = (b.storeys.len() > 1).then(|| {
             let chips = std::iter::once((None, "Alle".to_string())).chain(b.storeys.iter().enumerate().map(|(i, s)| (Some(i), s.name.clone())));
-            div().flex().flex_wrap().gap_1().mt_2().children(chips.enumerate().map(|(k, (storey, label))| {
+            div().flex().flex_wrap().gap(px(8.)).mt_2().children(chips.enumerate().map(|(k, (storey, label))| {
                 toggle(("summary-storey", k), label, self.summary_storey == storey).on_click(cx.listener(move |this, _, _, cx| {
                     this.summary_storey = storey;
                     cx.notify();
@@ -747,11 +789,18 @@ fn button(id: &'static str, label: &'static str, primary: bool) -> gpui::Statefu
         .child(label)
 }
 
+/// Height of toggles and the buttons next to them, so a row lines up.
+const TOGGLE_HEIGHT: f32 = 28.;
+
 fn toggle(id: impl Into<gpui::ElementId>, label: impl Into<SharedString>, on: bool) -> gpui::Stateful<gpui::Div> {
     div()
         .id(id)
+        .h(px(TOGGLE_HEIGHT))
+        .min_w(px(56.))
         .px_2p5()
-        .py_1()
+        .flex()
+        .items_center()
+        .justify_center()
         .rounded_md()
         .border_1()
         .cursor_pointer()
@@ -759,6 +808,50 @@ fn toggle(id: impl Into<gpui::ElementId>, label: impl Into<SharedString>, on: bo
         .when(on, |d| d.bg(rgb(ACCENT_SOFT)).border_color(rgb(ACCENT)).text_color(rgb(ACCENT)))
         .when(!on, |d| d.bg(rgb(PANEL)).border_color(rgb(BORDER)).text_color(rgb(MUTED)))
         .child(label.into())
+}
+
+#[cfg(target_os = "macos")]
+#[allow(unexpected_cfgs)] // objc 0.2's macros test a `cargo-clippy` feature
+fn set_dock_icon() {
+    use objc::runtime::Object;
+    use objc::{class, msg_send, sel, sel_impl};
+    unsafe {
+        let data: *mut Object = msg_send![class!(NSData), dataWithBytes: DOCK_ICON.as_ptr() length: DOCK_ICON.len()];
+        let image: *mut Object = msg_send![class!(NSImage), alloc];
+        let image: *mut Object = msg_send![image, initWithData: data];
+        let app: *mut Object = msg_send![class!(NSApplication), sharedApplication];
+        let () = msg_send![app, setApplicationIconImage: image];
+    }
+}
+
+/// The current step, a bar with one segment per step whose current one pulses, and how far along.
+fn working(p: &Progress) -> impl IntoElement {
+    let segment = 1. / p.total as f32;
+    let bar = div()
+        .relative()
+        .w(px(320.))
+        .h(px(6.))
+        .rounded_full()
+        .overflow_hidden()
+        .bg(rgb(SUNKEN))
+        .child(div().absolute().top_0().left_0().h_full().w(relative(p.done as f32 * segment)).bg(rgb(ACCENT)))
+        .child(
+            div().absolute().top_0().h_full().left(relative(p.done as f32 * segment)).w(relative(segment)).bg(rgb(ACCENT)).with_animation(
+                "working-step",
+                Animation::new(Duration::from_millis(1200)).repeat().with_easing(gpui::pulsating_between(0.15, 0.6)),
+                |el, delta| el.opacity(delta),
+            ),
+        );
+    centered(
+        div()
+            .flex()
+            .flex_col()
+            .items_center()
+            .gap_3()
+            .child(div().font_weight(FontWeight::MEDIUM).child(p.step.clone()))
+            .child(bar)
+            .child(div().h_4().text_xs().text_color(rgb(MUTED)).children(p.detail.clone())),
+    )
 }
 
 fn centered(child: impl IntoElement) -> gpui::Div {
@@ -780,6 +873,8 @@ fn main() {
     }
 
     Application::new().run(move |cx: &mut App| {
+        #[cfg(target_os = "macos")]
+        set_dock_icon();
         cx.on_action(|_: &Quit, cx| cx.quit());
         cx.bind_keys([KeyBinding::new(if cfg!(target_os = "macos") { "cmd-q" } else { "ctrl-q" }, Quit, None)]);
         cx.set_menus(vec![Menu { name: "Aufmaß".into(), items: vec![MenuItem::action("Aufmaß beenden", Quit)] }]);
@@ -811,6 +906,7 @@ fn main() {
                         initial_tab,
                         app_update: None,
                         _task: None,
+                        _progress_task: None,
                         _update_task: None,
                     };
                     view.start(paths, cx);

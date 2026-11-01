@@ -537,8 +537,10 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "aufmass",
+ "embed-resource",
  "gpui",
  "image",
+ "objc",
  "resvg",
 ]
 

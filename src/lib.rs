@@ -112,6 +112,12 @@ fn names_storey(path: &Path) -> bool {
 /// Reads all files. Unreadable files are reported, not fatal; call
 /// [`Conversion::check`] to find out whether anything usable came out.
 pub fn convert(files: &[PathBuf], cfg: &Config) -> Conversion {
+    convert_with_progress(files, cfg, |_, _| {})
+}
+
+/// [`convert`], calling `reading(n, file)` before each file with the number of
+/// files read so far; files are not read in the given order.
+pub fn convert_with_progress(files: &[PathBuf], cfg: &Config, mut reading: impl FnMut(usize, &Path)) -> Conversion {
     let mut building = Building { units: "m", storeys: Vec::new(), skipped: Vec::new() };
     let mut seen = HashSet::new();
     let mut linework = Vec::new();
@@ -120,8 +126,9 @@ pub fn convert(files: &[PathBuf], cfg: &Config) -> Conversion {
     // belongs to the first file that has it, so floor plans are read first.
     let mut order: Vec<usize> = (0..files.len()).collect();
     order.sort_by_key(|&i| !names_storey(&files[i]));
-    for i in order {
+    for (n, i) in order.into_iter().enumerate() {
         let f = &files[i];
+        reading(n, f);
         let drawing = match cad::load(f, cfg) {
             Ok(d) => d,
             Err(e) => {

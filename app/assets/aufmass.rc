@@ -1,0 +1,3 @@
+// Icon resource 1: Explorer shows it for the .exe, GPUI loads it for the
+// window and the taskbar.
+1 ICON "assets/icon.ico"
