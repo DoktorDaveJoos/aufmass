@@ -1,0 +1,20 @@
+[package]
+name = "aufmass-app"
+version = "0.1.0"
+edition = "2024"
+description = "Desktop app for Aufmaß: drop architect plans, get quantities, plans and a 3D preview"
+
+[[bin]]
+name = "aufmass-app"
+path = "src/main.rs"
+
+[dependencies]
+anyhow = "1.0.104"
+aufmass = { path = ".." }
+gpui = "=0.2.2"
+image = { version = "0.25", default-features = false }
+resvg = "0.45"
+
+# Compile the Metal shaders at startup, so building needs no Xcode Metal toolchain.
+[target.'cfg(target_os = "macos")'.dependencies]
+gpui = { version = "=0.2.2", features = ["runtime_shaders"] }

@@ -1,0 +1,59 @@
+# aufmass configuration. All lengths in meters.
+# Defaults are tuned to the Vectorworks export in "Planeingang_17.09.2026".
+
+# Units used when a drawing does not declare $INSUNITS: "mm", "cm" or "m".
+default_units = "m"
+
+# Hatch colors (AutoCAD color index) marking existing buildings. 3D elements
+# standing on such a hatch, and everything touching them, are skipped.
+existing_colors = [252]
+
+# Layers holding the 3D solids of each building part (case-insensitive).
+[layers]
+wall = ["Wand"]
+slab = ["Decke"]
+roof = ["Dachhaut"]
+
+[filters]
+# Thinner wall solids are glass panes or finishes, not walls.
+min_wall_thickness = 0.045
+# Slab-layer solids must be flat and large enough; the rest is furniture,
+# stairs or built-ins drawn on the same layer.
+max_slab_thickness = 0.5
+min_slab_area = 3.0
+# Smaller holes in a wall face are ignored (sockets, ducts).
+min_opening_area = 0.05
+# Openings starting at most this high above the wall bottom count as doors,
+# if they are at least min_door_height high; lower ones are plain openings.
+door_max_sill = 0.15
+min_door_height = 1.8
+
+# Names for element thicknesses. Unnamed elements get a generic name such as
+# "Außenwand 36,5 cm" or "Decke 18 cm".
+[[naming]]
+kind = "wall"
+thickness = 0.365
+name = "Außenwand Holzrahmen"
+
+[[naming]]
+kind = "wall"
+thickness = 0.06
+name = "Fassadenbekleidung"
+
+[[naming]]
+kind = "wall"
+thickness = 0.05
+name = "Außenputz Garage"
+
+[[naming]]
+kind = "slab"
+thickness = 0.18
+name = "BSP-Decke"
+
+# Programs the app starts for "In PAPA öffnen" and "In cadwork öffnen".
+# Without a path the app only opens the result folder.
+[papa]
+# path = 'C:\Programme\PAPA\PAPA.exe'
+
+[cadwork]
+# path = 'C:\cadwork\v30\ci.exe'
