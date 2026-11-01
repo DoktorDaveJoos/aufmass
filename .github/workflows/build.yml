@@ -3,9 +3,9 @@
 # Windows binaries have to be built on Windows; this runs both side by side.
 name: Build
 
+# Manual only (Actions tab -> Build -> Run workflow), so a push never starts
+# the slow Windows build.
 on:
-  push:
-  pull_request:
   workflow_dispatch:
 
 jobs:
@@ -19,6 +19,13 @@ jobs:
           - os: windows-latest
             artifact: aufmass-windows-x64
     runs-on: ${{ matrix.os }}
+    env:
+      # Compiled into the binaries; without it they send no error reports.
+      SENTRY_DSN: ${{ secrets.SENTRY_DSN }}
+      # For uploading debug symbols, so crash stack traces are readable.
+      SENTRY_AUTH_TOKEN: ${{ secrets.SENTRY_AUTH_TOKEN }}
+      SENTRY_ORG: ${{ vars.SENTRY_ORG }}
+      SENTRY_PROJECT: ${{ vars.SENTRY_PROJECT }}
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -29,6 +36,14 @@ jobs:
 
       - name: Build
         run: cargo build --workspace --release
+
+      - name: Upload debug symbols to Sentry (macOS)
+        if: runner.os == 'macOS' && env.SENTRY_AUTH_TOKEN != ''
+        run: npx --yes @sentry/cli@2 debug-files upload --include-sources target/release/aufmass.dSYM target/release/aufmass-app.dSYM
+
+      - name: Upload debug symbols to Sentry (Windows)
+        if: runner.os == 'Windows' && env.SENTRY_AUTH_TOKEN != ''
+        run: npx --yes @sentry/cli@2 debug-files upload --include-sources target/release/aufmass.exe target/release/aufmass.pdb target/release/aufmass-app.exe target/release/aufmass_app.pdb
 
       - name: Package (macOS)
         if: runner.os == 'macOS'

@@ -6,7 +6,7 @@ mod scene;
 
 use aufmass::model::{Kind, OpeningKind};
 use aufmass::report::{self, de};
-use aufmass::{collect_inputs, convert, default_out, Config, Conversion, FileReport, GAEB_FILE};
+use aufmass::{collect_inputs, convert, default_out, telemetry, Config, Conversion, FileReport, GAEB_FILE};
 use gpui::prelude::FluentBuilder;
 use gpui::{
     actions, canvas, div, ClipboardItem, img, point, px, rgb, size, App, AppContext, Application, Bounds, Context, Corners, ExternalPaths,
@@ -191,15 +191,20 @@ fn run(paths: Vec<PathBuf>) -> State {
         Ok(f) => f,
         Err(e) => return fail(e, vec![]),
     };
+    let out = default_out(&paths[0]);
+    telemetry::set_folders(&paths, &out);
     let conversion = convert(&files, &cfg);
     let lines: Vec<String> = conversion.files.iter().map(FileReport::line).collect();
     if let Err(e) = conversion.check() {
+        telemetry::conversion(&conversion.files, Some(&e));
         return fail(e, lines);
     }
-    let out = default_out(&paths[0]);
     if let Err(e) = conversion.write(&out) {
-        return fail(e.context("Ergebnis konnte nicht gespeichert werden"), lines);
+        let e = e.context("Ergebnis konnte nicht gespeichert werden");
+        telemetry::conversion(&conversion.files, Some(&e));
+        return fail(e, lines);
     }
+    telemetry::conversion(&conversion.files, None);
     let plans = conversion
         .building
         .storeys
@@ -679,6 +684,8 @@ fn centered(child: impl IntoElement) -> gpui::Div {
 }
 
 fn main() {
+    // Crashes and failed conversions; the window has no console to print them to.
+    let _sentry = telemetry::init("app");
     let mut paths = Vec::new();
     let mut initial_tab = None;
     let mut args = std::env::args().skip(1);

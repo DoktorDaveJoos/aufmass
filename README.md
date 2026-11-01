@@ -110,10 +110,25 @@ cargo run --release -p aufmass-app -- ~/Downloads/Planeingang_17.09.2026 --tab E
 
 `--tab <storey>` opens that plan tab after loading, for quick checks.
 
+## Error reports
+
+Both binaries report crashes and failed conversions (no 3D model, unreadable
+files or solids, results not saved) to Sentry (`src/telemetry.rs`). Reports
+carry error messages, file names and counts; plan folders, the home folder and
+the computer name are scrubbed, and plan files never leave the PC.
+
+The DSN is compiled in from `SENTRY_DSN` at build time (CI secret). Without one,
+reporting is off; at run time `SENTRY_DSN` overrides it, and an empty value turns
+it off (for local testing: `SENTRY_DSN=http://public@127.0.0.1:PORT/1` and a
+small HTTP server that prints the envelopes).
+
 ## Builds
 
 `.github/workflows/build.yml` builds and tests both binaries on macOS and
-Windows and uploads them with `aufmass.toml` as artifacts. The Windows build has
+Windows and uploads them with `aufmass.toml` as artifacts. It runs only when
+started by hand (Actions -> Build -> Run workflow). Secrets `SENTRY_DSN` and
+`SENTRY_AUTH_TOKEN` and variables `SENTRY_ORG` and `SENTRY_PROJECT` turn on
+error reports and the upload of debug symbols (.pdb/.dSYM) to Sentry. The Windows build has
 to run on Windows, because GPUI compiles its DirectX shaders with the Windows
 SDK. On macOS the app uses GPUI's `runtime_shaders`, so no Xcode Metal
 toolchain is needed to build it. `.cargo/config.toml` links the C runtime

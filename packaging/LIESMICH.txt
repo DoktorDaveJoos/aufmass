@@ -54,3 +54,11 @@ aufmass.toml. Jedes Architekturbüro zeichnet anders; eine angepasste
 aufmass.toml je Büro ist normal.
 
 aufmass.exe ist die Kommandozeilen-Version mit denselben Ergebnissen.
+
+
+Fehlerberichte
+--------------
+Stürzt Aufmaß ab oder kann Pläne nicht auswerten, schickt es einen kurzen
+Fehlerbericht an bauzertifikate.de (über Sentry): Fehlermeldung, Dateinamen,
+Anzahl der Bauteile, Programm- und Windows-Version. Die Pläne selbst, Ordner-
+und Computernamen werden nicht übertragen.

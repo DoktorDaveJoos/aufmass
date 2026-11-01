@@ -1,6 +1,6 @@
 use anyhow::Result;
 use clap::Parser;
-use aufmass::{collect_inputs, convert, default_out, report, Config};
+use aufmass::{collect_inputs, convert, default_out, report, telemetry, Config};
 use std::path::PathBuf;
 
 /// Reads architect DWG/DXF plans that contain 3D solids and lists the walls,
@@ -20,16 +20,19 @@ struct Args {
 }
 
 fn main() -> Result<()> {
+    let _sentry = telemetry::init("cli");
     let args = Args::parse();
     let cfg = Config::load(args.config.as_deref())?;
     let files = collect_inputs(&args.inputs)?;
+    let out = args.out.unwrap_or_else(|| default_out(&args.inputs[0]));
+    telemetry::set_folders(&args.inputs, &out);
     let conversion = convert(&files, &cfg);
     for f in &conversion.files {
         eprintln!("  {}", f.line());
     }
-    conversion.check()?;
-    let out = args.out.unwrap_or_else(|| default_out(&args.inputs[0]));
-    conversion.write(&out)?;
+    let result = conversion.check().and_then(|()| conversion.write(&out));
+    telemetry::conversion(&conversion.files, result.as_ref().err());
+    result?;
     report::print_summary(&conversion.building);
     println!("\nGeschrieben nach {}: building.json, mengen.xlsx, mengen.x83 (GAEB), vorschau-*.svg", out.display());
     Ok(())
