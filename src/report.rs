@@ -1,6 +1,5 @@
 //! Quantity list as Excel workbook and console summary.
 
-use crate::config::format_cm;
 use crate::model::{Building, Kind, OpeningKind, Storey};
 use anyhow::Result;
 use rust_xlsxwriter::{Format, Workbook, Worksheet};
@@ -107,6 +106,7 @@ struct Formats {
     bold: Format,
     num: Format,
     bold_num: Format,
+    cm: Format,
 }
 
 pub fn write_xlsx(b: &Building, path: &Path) -> Result<()> {
@@ -116,6 +116,7 @@ pub fn write_xlsx(b: &Building, path: &Path) -> Result<()> {
         bold: Format::new().set_bold(),
         num: Format::new().set_num_format("#,##0.00"),
         bold_num: Format::new().set_bold().set_num_format("#,##0.00"),
+        cm: Format::new().set_num_format("0.0"),
     };
     let (bold, m2) = (&f.bold, &f.num);
 
@@ -154,7 +155,7 @@ pub fn write_xlsx(b: &Building, path: &Path) -> Result<()> {
             ws.write_string(row, 3, &e.name)?;
             ws.write_string(row, 4, &e.layer)?;
             ws.write_string(row, 5, match e.exterior { Some(true) => "außen", Some(false) => "innen", None => "" })?;
-            ws.write_string(row, 6, format_cm(e.thickness))?;
+            ws.write_number_with_format(row, 6, (e.thickness * 1000.0).round() / 10.0, &f.cm)?;
             ws.write_number_with_format(row, 7, e.length, m2)?;
             ws.write_number_with_format(row, 8, e.height, m2)?;
             if let Some(p) = e.pitch_deg {

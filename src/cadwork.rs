@@ -47,7 +47,7 @@ pub fn write_plugin(api_dir: &Path) -> Result<()> {
     std::fs::create_dir_all(&dir)?;
     let file = dir.join(format!("{PLUGIN_NAME}.py"));
     if std::fs::read_to_string(&file).ok().as_deref() != Some(PLUGIN) {
-        std::fs::write(&file, PLUGIN).with_context(|| format!("writing {}", file.display()))?;
+        std::fs::write(&file, PLUGIN).with_context(|| format!("{} konnte nicht geschrieben werden", file.display()))?;
     }
     Ok(())
 }

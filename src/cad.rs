@@ -31,9 +31,9 @@ pub fn load(path: &Path, cfg: &Config) -> Result<Drawing> {
     let doc = match ext.as_str() {
         "dwg" => DwgReader::from_file(path).and_then(|mut r| r.read()),
         "dxf" => DxfReader::from_file(path).and_then(|r| r.read()),
-        _ => bail!("unsupported file type: {}", path.display()),
+        _ => bail!("{}: nur DWG und DXF werden gelesen", path.display()),
     }
-    .map_err(|e| anyhow!("reading {}: {e}", path.display()))?;
+    .map_err(|e| anyhow!("{} konnte nicht gelesen werden: {e}", path.display()))?;
     let k = cfg.units_to_meters(doc.header.insertion_units);
 
     let mut d = Drawing {

@@ -16,10 +16,15 @@ fn fonts() -> Arc<usvg::fontdb::Database> {
     .clone()
 }
 
+/// Longest side of a rendered preview; a large building at 60 px/m would
+/// otherwise need hundreds of megabytes.
+const MAX_SIDE: f32 = 6000.0;
+
 fn pixmap(svg: &str, scale: f32) -> Result<tiny_skia::Pixmap> {
     let options = usvg::Options { fontdb: fonts(), ..Default::default() };
     let tree = usvg::Tree::from_str(svg, &options)?;
     let size = tree.size();
+    let scale = scale.min(MAX_SIDE / size.width().max(size.height()));
     let (w, h) = ((size.width() * scale).ceil() as u32, (size.height() * scale).ceil() as u32);
     let mut pixmap = tiny_skia::Pixmap::new(w, h).ok_or_else(|| anyhow!("empty SVG"))?;
     resvg::render(&tree, tiny_skia::Transform::from_scale(scale, scale), &mut pixmap.as_mut());

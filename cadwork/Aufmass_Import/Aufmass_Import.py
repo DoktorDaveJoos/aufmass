@@ -91,7 +91,8 @@ def main():
         return
     created = build(building)
     ec.add_created_elements_to_undo(created)
-    uc.print_to_console("Aufmaß: %d Bauteile aus %s erzeugt" % (len(created), path))
+    # print_to_console only reaches the debug console; this shows in the 3D view's bottom bar.
+    uc.print_message("Aufmaß: %d Bauteile aus %s erzeugt" % (len(created), path), 1, 1)
 
 
 main()

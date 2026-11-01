@@ -79,7 +79,13 @@ path = 'C:\cadwork\v30\ci.exe'
 ## Limits
 
 - Needs 3D solids. Pure 2D drawings are rejected for now.
-- The storey is the file name (`eg.dwg` -> `EG`).
+- The storey is the file name (`eg.dwg` -> `EG`). Solids repeated in several
+  files are counted for the first file whose name names a storey (EG, 1.OG,
+  Dachgeschoss, …), so a site plan sorted before the floor plans does not take
+  them over.
+- Existing buildings are found through connected solids: an extension that
+  touches the existing building may be skipped with it. Not yet tested on
+  such a plan set.
 - Door/window type is guessed from sill height; opening heights and widths are
   measured on the face, not read from window objects.
 - Only planar faces; curved edges are approximated by their vertices.
@@ -88,7 +94,8 @@ path = 'C:\cadwork\v30\ci.exe'
 
 `app/` is a GPUI desktop app (`aufmass-app`) on top of the same library: drag a
 folder or DWG/DXF files onto the window, or use "Ordner wählen …" / "Dateien
-wählen …". It writes the same output folder and shows the quantities, the plan
+wählen …". It writes the same output folder and shows the quantities with
+subtotals per element type (for the whole building or one storey), the plan
 previews per storey and a 3D view (drag to rotate, scroll to zoom, storeys and
 roof can be hidden).
 
@@ -109,7 +116,9 @@ cargo run --release -p aufmass-app -- ~/Downloads/Planeingang_17.09.2026 --tab E
 Windows and uploads them with `aufmass.toml` as artifacts. The Windows build has
 to run on Windows, because GPUI compiles its DirectX shaders with the Windows
 SDK. On macOS the app uses GPUI's `runtime_shaders`, so no Xcode Metal
-toolchain is needed to build it.
+toolchain is needed to build it. `.cargo/config.toml` links the C runtime
+statically on Windows, so the .exe needs no Visual C++ Redistributable. The
+package includes `packaging/LIESMICH.txt`, a German quick start for users.
 
 ## Development
 

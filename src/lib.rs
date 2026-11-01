@@ -55,8 +55,13 @@ impl FileReport {
 /// All .dwg/.dxf files in the given files and folders (recursively), sorted.
 pub fn collect_inputs(inputs: &[PathBuf]) -> Result<Vec<PathBuf>> {
     fn walk(p: &Path, out: &mut Vec<PathBuf>) -> Result<()> {
+        // macOS metadata ("._eg.dwg" on USB sticks and in zips) and Office lock files ("~$...").
+        let name = p.file_name().unwrap_or_default().to_string_lossy();
+        if name.starts_with("._") || name.starts_with("~$") {
+            return Ok(());
+        }
         if p.is_dir() {
-            for entry in std::fs::read_dir(p).with_context(|| format!("reading {}", p.display()))? {
+            for entry in std::fs::read_dir(p).with_context(|| format!("Ordner {} konnte nicht gelesen werden", p.display()))? {
                 walk(&entry?.path(), out)?;
             }
         } else if p.extension().and_then(|e| e.to_str()).is_some_and(|e| e.eq_ignore_ascii_case("dwg") || e.eq_ignore_ascii_case("dxf")) {
@@ -92,18 +97,33 @@ pub fn default_out(first: &Path) -> PathBuf {
     base.join("aufmass")
 }
 
+/// Whether a file name names a storey: "EG", "02_OG", "1.OG", "Grundriss Dachgeschoss".
+fn names_storey(path: &Path) -> bool {
+    const STOREYS: [&str; 15] = [
+        "kg", "ug", "eg", "og", "dg", "sg", "sb", "keller", "kellergeschoss", "untergeschoss", "erdgeschoss",
+        "obergeschoss", "dachgeschoss", "staffelgeschoss", "spitzboden",
+    ];
+    let stem = path.file_stem().unwrap_or_default().to_string_lossy().to_lowercase();
+    stem.split(|c: char| !c.is_alphanumeric()).any(|w| STOREYS.contains(&w.trim_matches(|c: char| c.is_ascii_digit())))
+}
+
 /// Reads all files. Unreadable files are reported, not fatal; call
 /// [`Conversion::check`] to find out whether anything usable came out.
 pub fn convert(files: &[PathBuf], cfg: &Config) -> Conversion {
     let mut building = Building { units: "m", storeys: Vec::new(), skipped: Vec::new() };
     let mut seen = HashSet::new();
     let mut linework = Vec::new();
-    let mut reports = Vec::new();
-    for f in files {
+    let mut reports: Vec<Option<FileReport>> = files.iter().map(|_| None).collect();
+    // A solid found in several files (the site plan repeats the ground floor)
+    // belongs to the first file that has it, so floor plans are read first.
+    let mut order: Vec<usize> = (0..files.len()).collect();
+    order.sort_by_key(|&i| !names_storey(&files[i]));
+    for i in order {
+        let f = &files[i];
         let drawing = match cad::load(f, cfg) {
             Ok(d) => d,
             Err(e) => {
-                reports.push(FileReport {
+                reports[i] = Some(FileReport {
                     file: f.file_name().unwrap_or_default().to_string_lossy().into_owned(),
                     solids: 0,
                     elements: 0,
@@ -113,8 +133,17 @@ pub fn convert(files: &[PathBuf], cfg: &Config) -> Conversion {
                 continue;
             }
         };
-        let storey = classify::storey(&drawing, cfg, &mut seen, &mut building.skipped);
-        reports.push(FileReport {
+        // Same-named files in different folders get distinct storeys, previews and GAEB titles.
+        let base = drawing.stem.to_uppercase();
+        let mut name = base.clone();
+        for n in 2.. {
+            if !building.storeys.iter().any(|s| s.name == name) {
+                break;
+            }
+            name = format!("{base}-{n}");
+        }
+        let storey = classify::storey(&drawing, &name, cfg, &mut seen, &mut building.skipped);
+        reports[i] = Some(FileReport {
             file: drawing.file.clone(),
             solids: drawing.solids.iter().map(|s| s.bodies.len()).sum(),
             elements: storey.elements.len(),
@@ -135,7 +164,7 @@ pub fn convert(files: &[PathBuf], cfg: &Config) -> Conversion {
         .flat_map(|s| &s.elements)
         .map(|e| ((e.kind, e.name.clone()), cfg.unit_for(e.kind, &e.name)))
         .collect();
-    Conversion { building, files: reports, linework, colors, units }
+    Conversion { building, files: reports.into_iter().flatten().collect(), linework, colors, units }
 }
 
 impl Conversion {
@@ -170,15 +199,33 @@ impl Conversion {
 
     /// Writes building.json, mengen.xlsx, mengen.x83 and one plan preview per storey.
     pub fn write(&self, out: &Path) -> Result<()> {
-        std::fs::create_dir_all(out).with_context(|| format!("creating {}", out.display()))?;
-        std::fs::write(out.join("building.json"), serde_json::to_string_pretty(&self.building)?)?;
-        report::write_xlsx(&self.building, &out.join("mengen.xlsx"))?;
-        gaeb::write_x83(&self.building, &self.units, &project_name(out), &gaeb::today(), &out.join(GAEB_FILE))?;
+        std::fs::create_dir_all(out).with_context(|| format!("Ordner {} konnte nicht angelegt werden", out.display()))?;
+        let saving = |name: &str| format!("{name} konnte nicht gespeichert werden. Ist die Datei noch in einem anderen Programm geöffnet?");
+        std::fs::write(out.join("building.json"), serde_json::to_string_pretty(&self.building)?).with_context(|| saving("building.json"))?;
+        report::write_xlsx(&self.building, &out.join("mengen.xlsx")).with_context(|| saving("mengen.xlsx"))?;
+        gaeb::write_x83(&self.building, &self.units, &project_name(out), &gaeb::today(), &out.join(GAEB_FILE))
+            .with_context(|| saving(GAEB_FILE))?;
         // Only a convenience for the cadwork plugin; the outputs are complete without it.
         cadwork::remember_output(&out.join("building.json")).ok();
         for s in &self.building.storeys {
-            std::fs::write(out.join(format!("vorschau-{}.svg", s.name)), self.preview_svg(s))?;
+            let file = format!("vorschau-{}.svg", s.name);
+            std::fs::write(out.join(&file), self.preview_svg(s)).with_context(|| saving(&file))?;
         }
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn storey_file_names() {
+        for n in ["eg.dwg", "02_EG.dwg", "1.OG.dxf", "OG2.dwg", "Grundriss Dachgeschoss.dwg", "KG-neu.dwg"] {
+            assert!(names_storey(Path::new(n)), "{n}");
+        }
+        for n in ["lage.dwg", "01_Lageplan.dwg", "schnitt.dwg", "nw.dwg", "Ansicht Süd.dwg"] {
+            assert!(!names_storey(Path::new(n)), "{n}");
+        }
     }
 }

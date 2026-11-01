@@ -336,7 +336,7 @@ impl Converter {
                             .flex_col()
                             .text_xs()
                             .text_color(rgb(MUTED))
-                            .font_family("Menlo")
+                            .font_family(if cfg!(windows) { "Consolas" } else { "Menlo" })
                             .children(files.iter().map(|l| div().child(l.clone()))),
                     )
                 })
@@ -552,6 +552,8 @@ impl Converter {
                             .child(div().flex_1().text_color(rgb(if used { TEXT } else { MUTED })).child(f.file.clone()))
                             .child(div().child(match (&f.error, f.elements) {
                                 (Some(_), _) => "nicht lesbar".to_string(),
+                                (None, 0) if f.solids > 0 => "nur Doppelte, Bestand, Möbel".to_string(),
+                                (None, 0) if f.unreadable > 0 => "3D-Daten nicht lesbar".to_string(),
                                 (None, 0) => "kein 3D-Modell".to_string(),
                                 (None, n) => format!("{n} Bauteile"),
                             }))

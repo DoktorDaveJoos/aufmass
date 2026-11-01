@@ -85,10 +85,13 @@ impl Config {
             }
         };
         let (text, origin) = match found {
-            Some(p) => (std::fs::read_to_string(&p).with_context(|| format!("reading {}", p.display()))?, p.display().to_string()),
-            None => (DEFAULT.to_string(), "built-in defaults".to_string()),
+            Some(p) => (
+                std::fs::read_to_string(&p).with_context(|| format!("Konfiguration {} konnte nicht gelesen werden", p.display()))?,
+                p.display().to_string(),
+            ),
+            None => (DEFAULT.to_string(), "eingebaute Standardwerte".to_string()),
         };
-        toml::from_str(&text).with_context(|| format!("parsing config from {origin}"))
+        toml::from_str(&text).with_context(|| format!("Fehler in der Konfiguration ({origin})"))
     }
 
     pub fn kind_of_layer(&self, layer: &str) -> Option<Kind> {

@@ -1,0 +1,56 @@
+Aufmaß by bauzertifikate.de
+===========================
+
+Liest die DWG/DXF-Pläne vom Architekten (mit 3D-Modell) und listet alle Wände,
+Decken und Dächer mit Flächen und Volumen.
+
+
+Starten
+-------
+aufmass-app.exe doppelklicken. Beim ersten Start meldet Windows eventuell
+„Der Computer wurde durch Windows geschützt“: auf „Weitere Informationen“ und
+dann „Trotzdem ausführen“ klicken.
+
+aufmass.toml muss im selben Ordner wie die .exe liegen.
+
+
+Benutzung
+---------
+1. Den Ordner mit den Plänen ins Fenster ziehen (oder „Ordner wählen …“).
+   Unterordner werden mit gelesen; alte Planstände vorher herausnehmen.
+2. Links stehen die Mengen mit Summen je Bauteilart, oben lässt sich ein
+   Geschoss auswählen. Rechts das 3D-Modell und die Grundrisse zum Prüfen.
+3. Die Ergebnisse liegen im Ordner „aufmass“ neben den Plänen:
+     mengen.xlsx     Mengen, alle Bauteile, Öffnungen, übersprungene Teile
+     mengen.x83      GAEB-Datei für PAPA
+     building.json   Bauteile für den cadwork-Import
+     vorschau-*.svg  Grundrisse mit den erkannten Bauteilen
+   Vor einer neuen Auswertung mengen.xlsx in Excel schließen.
+
+
+PAPA und cadwork
+----------------
+aufmass.toml mit dem Editor öffnen und die Programme eintragen, z. B.:
+
+  [papa]
+  path = 'C:\Programme\PAPA\PAPA.exe'
+
+  [cadwork]
+  path = 'C:\cadwork\v30\ci.exe'
+
+„In PAPA öffnen“ startet PAPA und kopiert den Pfad zu mengen.x83. In PAPA das
+Projekt öffnen, GAEB-Import wählen und den Pfad einfügen (Strg+V).
+
+„In cadwork öffnen“ richtet das Plugin „Aufmass_Import“ ein und startet
+cadwork. Dort eine 3D-Datei öffnen und im Plugin-Menü „Aufmass_Import“ wählen:
+die letzte Auswertung wird als Wände, Decken und Dächer angelegt, gruppiert
+nach Geschoss.
+
+
+Wenn etwas nicht erkannt wird
+-----------------------------
+Layer-Namen, Bestandsfarbe, Filter und Bezeichnungen je Dicke stehen in
+aufmass.toml. Jedes Architekturbüro zeichnet anders; eine angepasste
+aufmass.toml je Büro ist normal.
+
+aufmass.exe ist die Kommandozeilen-Version mit denselben Ergebnissen.

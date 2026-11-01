@@ -42,8 +42,8 @@ fn mean(pts: &[V3]) -> V3 {
     pts.iter().fold(V3::default(), |a, p| a + *p) * (1.0 / pts.len() as f64)
 }
 
-/// Builds the elements of one floor plan file.
-pub fn storey(d: &Drawing, cfg: &Config, seen: &mut HashSet<String>, skipped: &mut Vec<Skipped>) -> Storey {
+/// Builds the elements of one floor plan file as the storey `name`.
+pub fn storey(d: &Drawing, name: &str, cfg: &Config, seen: &mut HashSet<String>, skipped: &mut Vec<Skipped>) -> Storey {
     let mut skips: BTreeMap<(String, String), usize> = BTreeMap::new();
     let bodies: Vec<(&str, Kind, &Body, Bbox)> = d
         .solids
@@ -83,10 +83,9 @@ pub fn storey(d: &Drawing, cfg: &Config, seen: &mut HashSet<String>, skipped: &m
     }
 
     mark_exterior(&mut elements);
-    let name = d.stem.to_uppercase();
-    name_and_number(&name, &mut elements, cfg);
+    name_and_number(name, &mut elements, cfg);
     skipped.extend(skips.into_iter().map(|((layer, reason), count)| Skipped { file: d.file.clone(), layer, reason, count }));
-    Storey { name, file: d.file.clone(), elements }
+    Storey { name: name.to_string(), file: d.file.clone(), elements }
 }
 
 /// Marks bodies standing on an existing-building hatch, plus everything connected to them.
