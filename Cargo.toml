@@ -36,3 +36,8 @@ codegen-units = 1
 # crash stack traces; the shipped binaries stay small.
 debug = "line-tables-only"
 split-debuginfo = "packed"
+
+# The 3D preview rasterizes on the CPU; unoptimized it takes a third of a
+# second per frame, too slow to rotate in a development build.
+[profile.dev.package.aufmass-app]
+opt-level = 3
