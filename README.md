@@ -107,12 +107,26 @@ path = 'C:\cadwork\v30\ci.exe'
 folder or DWG/DXF files onto the window, or use "Ordner wählen …" / "Dateien
 wählen …". It writes the same output folder and shows the quantities with
 subtotals per element type (for the whole building or one storey), the plan
-previews per storey and a 3D view (drag to rotate, scroll to zoom, storeys and
-roof can be hidden).
+previews per storey ("Plan EG", …) and the model ("Modell") in three views:
 
-The 3D view is a software renderer: the faces of each solid, back faces
-culled, drawn back to front per element. Good enough for a few thousand faces;
-it has no z-buffer, so intersecting elements can overlap wrongly.
+- **3D**: drag to rotate, scroll to zoom.
+- **Grundriss**: one storey from above, in the drawing's orientation: walls in
+  their colors with doors and windows across them, slabs tinted, the roof
+  dashed. Drag to move, scroll to zoom.
+- **Ansicht**: one side straight on (Nord, Ost, Süd, West, taking the plan's
+  y axis as north; only the names depend on that).
+
+Storeys and the roof can be hidden. All views carry dimensions as German
+building drawings do (DIN 406, DIN 1356): extension lines, oblique ticks,
+meters with two decimals from 1 m and centimeters below, the millimeter
+raised. With nothing selected they give the overall size of what is shown;
+clicking an element highlights it and gives its own length, height and
+thickness (`app/src/dimension.rs`). A selection carries over between views.
+
+3D and Ansicht come from a software renderer (`app/src/scene.rs`): flat-shaded
+faces rasterized on the CPU into a depth buffer and painted as one image, the
+dimensions drawn on top. The Grundriss is drawn as vectors from the wall
+footprints and the slab and roof outlines (`app/src/floor_plan.rs`).
 
 ```bash
 cargo run --release -p aufmass-app                                   # empty window

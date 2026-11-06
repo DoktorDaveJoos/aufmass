@@ -1,6 +1,8 @@
 // No console window next to the app on Windows.
 #![cfg_attr(windows, windows_subsystem = "windows")]
 
+mod dimension;
+mod floor_plan;
 mod plan;
 mod scene;
 
@@ -12,11 +14,12 @@ use gpui::prelude::FluentBuilder;
 use gpui::{
     actions, canvas, div, relative, Animation, AnimationExt, ClipboardItem, img, point, px, rgb, size, App, AppContext, Application, Bounds, Context, Corners, ExternalPaths,
     FontWeight, Image, ImageFormat, InteractiveElement, IntoElement, KeyBinding, Menu, MenuItem, MouseButton,
-    MouseDownEvent, MouseMoveEvent, ParentElement, PathPromptOptions, Pixels, Point, Render, RenderImage,
+    MouseDownEvent, MouseMoveEvent, MouseUpEvent, ParentElement, PathPromptOptions, Pixels, Point, Render, RenderImage,
     ScrollWheelEvent, SharedString, StatefulInteractiveElement, Styled, Task, TitlebarOptions,
     Window, WindowBounds, WindowOptions,
 };
-use scene::{Camera, Scene, Visibility};
+use floor_plan::FloorPlan;
+use scene::{Camera, PanZoom, Scene, Visibility};
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::Duration;
@@ -57,6 +60,8 @@ struct Done {
     /// Rasterized plan preview per storey.
     plans: Vec<(String, Option<Arc<RenderImage>>)>,
     scene: Arc<Scene>,
+    /// The same model from above, a storey at a time.
+    floor_plan: Arc<FloorPlan>,
     /// Programs from the config, for "In PAPA öffnen" and "In cadwork öffnen";
     /// without one they are looked for, or the user picks them.
     papa: Option<PathBuf>,
@@ -95,12 +100,34 @@ enum Tab {
     Plan(usize),
 }
 
+/// How the model tab shows the model.
+#[derive(Clone, Copy, PartialEq)]
+enum ModelView {
+    Model,
+    /// From above, as a floor plan.
+    Plan,
+    /// Straight at one side.
+    Elevation,
+}
+
+
 struct Converter {
     state: State,
     tab: Tab,
+    model_view: ModelView,
     camera: Camera,
     visibility: Visibility,
+    plan_camera: PanZoom,
+    /// Storey the floor plan shows.
+    plan_storey: usize,
+    elevation_camera: PanZoom,
+    /// Side the elevation shows, as in [`Scene::facade`].
+    elevation_side: usize,
     drag: Option<Point<Pixels>>,
+    /// Where the mouse went down, until it moves away: a click selects an element.
+    press: Option<Point<Pixels>>,
+    /// Element shown highlighted and dimensioned, from [`Scene::pick`].
+    selected: Option<usize>,
     /// Storey the quantity list is limited to; `None` lists the whole building.
     summary_storey: Option<usize>,
     /// One-line message under the header, e.g. what to do in PAPA next.
@@ -137,8 +164,12 @@ impl Converter {
             let state = job.await;
             this.update(cx, |this, cx| {
                 if let State::Done(done) = &state {
-                    this.visibility = Visibility { storeys: vec![true; done.plans.len()], roof: true };
+                    this.visibility = Visibility { storeys: vec![true; done.plans.len()], roof: true, dimensions: this.visibility.dimensions };
                     this.camera = Camera::default();
+                    this.plan_camera = PanZoom::default();
+                    this.plan_storey = 0;
+                    this.elevation_camera = PanZoom::default();
+                    this.selected = None;
                     this.summary_storey = None;
                     this.tab = match this.initial_tab.take() {
                         Some(t) => done.plans.iter().position(|(n, _)| n.eq_ignore_ascii_case(&t)).map_or(Tab::Model, Tab::Plan),
@@ -352,7 +383,7 @@ fn run(paths: Vec<PathBuf>, progress: &Mutex<Progress>) -> State {
         return fail(e, lines);
     }
     telemetry::conversion(&conversion.files, None);
-    report("Vorschau wird vorbereitet …".into(), Some("Grundrisse und 3D-Modell".into()), n + 1);
+    report("Vorschau wird vorbereitet …".into(), Some("Pläne und Modell".into()), n + 1);
     let plans = conversion
         .building
         .storeys
@@ -360,7 +391,8 @@ fn run(paths: Vec<PathBuf>, progress: &Mutex<Progress>) -> State {
         .map(|s| (s.name.clone(), plan::render(&conversion.preview_svg(s), 2.0).ok()))
         .collect();
     let scene = Arc::new(Scene::new(&conversion.building, conversion.colors()));
-    State::Done(Box::new(Done { conversion, out, plans, scene, papa: cfg.papa.path.clone(), cadwork: cfg.cadwork.path.clone() }))
+    let floor_plan = Arc::new(FloorPlan::new(&conversion.building, conversion.colors()));
+    State::Done(Box::new(Done { conversion, out, plans, scene, floor_plan, papa: cfg.papa.path.clone(), cadwork: cfg.cadwork.path.clone() }))
 }
 
 impl Render for Converter {
@@ -548,8 +580,9 @@ impl Converter {
     }
 
     fn tabs(&self, done: &Done, cx: &mut Context<Self>) -> impl IntoElement {
-        let mut tabs = vec![(Tab::Model, SharedString::from("3D-Modell"))];
-        tabs.extend(done.plans.iter().enumerate().map(|(i, (n, _))| (Tab::Plan(i), SharedString::from(format!("Grundriss {n}")))));
+        // "Plan", as the model has a Grundriss of its own.
+        let mut tabs = vec![(Tab::Model, SharedString::from("Modell"))];
+        tabs.extend(done.plans.iter().enumerate().map(|(i, (n, _))| (Tab::Plan(i), SharedString::from(format!("Plan {n}")))));
         div().flex().gap_1().px_2().pt_2().border_b_1().border_color(rgb(BORDER)).children(tabs.into_iter().enumerate().map(
             |(i, (tab, label))| {
                 let active = self.tab == tab;
@@ -573,18 +606,49 @@ impl Converter {
     }
 
     fn model(&self, done: &Done, cx: &mut Context<Self>) -> impl IntoElement {
-        let scene = done.scene.clone();
-        let camera = self.camera;
-        let visibility = self.visibility.clone();
+        let (scene, floor_plan) = (done.scene.clone(), done.floor_plan.clone());
+        let (view, camera, plan_camera) = (self.model_view, self.camera, self.plan_camera);
+        let elevation = Camera {
+            yaw: done.scene.facade(self.elevation_side),
+            pitch: 0.0,
+            zoom: self.elevation_camera.zoom,
+            pan: self.elevation_camera.pan,
+        };
+        let visibility = self.shown();
+        let selected = self.selected;
+        let plan = view == ModelView::Plan;
         let toggles = done.plans.iter().enumerate().map(|(i, (name, _))| {
-            let on = self.visibility.storeys.get(i).copied().unwrap_or(true);
+            // The floor plan shows one storey at a time.
+            let on = if plan { i == self.plan_storey } else { self.visibility.storeys.get(i).copied().unwrap_or(true) };
             toggle(("storey", i), name.clone(), on).on_click(cx.listener(move |this, _, _, cx| {
-                if let Some(v) = this.visibility.storeys.get_mut(i) {
+                if this.model_view == ModelView::Plan {
+                    this.plan_storey = i;
+                } else if let Some(v) = this.visibility.storeys.get_mut(i) {
                     *v = !*v;
                 }
                 cx.notify();
             }))
         });
+        let switch = track().children([(ModelView::Model, "3D"), (ModelView::Plan, "Grundriss"), (ModelView::Elevation, "Ansicht")].into_iter().map(|(v, label)| {
+            segment(("model-view", v as usize), label, view == v).on_click(cx.listener(move |this, _, _, cx| {
+                this.show_model_view(v);
+                cx.notify();
+            }))
+        }));
+        let sides = (view == ModelView::Elevation).then(|| {
+            let sides = track().children([("Nord", 2), ("Ost", 1), ("Süd", 0), ("West", 3)].into_iter().map(|(label, side)| {
+                segment(("side", side), label, self.elevation_side == side).on_click(cx.listener(move |this, _, _, cx| {
+                    this.elevation_side = side;
+                    cx.notify();
+                }))
+            }));
+            div().flex().flex_none().items_center().gap(px(6.)).child(sides).child(info(
+                "sides-info",
+                "Die Himmelsrichtungen nehmen an, dass Norden im Plan oben liegt. Ist der Plan anders gedreht, \
+                 stimmen nur die Namen der Seiten nicht; Ansichten und Maße bleiben richtig.",
+            ))
+        });
+        let hint = if view == ModelView::Model { "Ziehen: drehen" } else { "Ziehen: verschieben" };
         div()
             .flex_1()
             .min_h_0()
@@ -593,20 +657,41 @@ impl Converter {
             .child(
                 div()
                     .flex()
+                    // A small window puts the buttons on two lines.
+                    .flex_wrap()
                     .items_center()
                     .gap(px(8.))
                     .px_3()
                     .py_2()
+                    .child(switch)
+                    .when_some(sides, |d, sides| d.child(sides))
+                    .child(div().flex_none().w(px(1.)).h(px(18.)).bg(rgb(BORDER)))
                     .children(toggles)
                     .child(toggle("roof", "Dach", self.visibility.roof).on_click(cx.listener(|this, _, _, cx| {
                         this.visibility.roof = !this.visibility.roof;
                         cx.notify();
                     })))
-                    .child(button("reset-view", "Ansicht zurücksetzen", false).h(px(TOGGLE_HEIGHT)).py_0().flex().items_center().text_xs().on_click(cx.listener(|this, _, _, cx| {
-                        this.camera = Camera::default();
+                    .child(toggle("dimensions", "Maße", self.visibility.dimensions).on_click(cx.listener(|this, _, _, cx| {
+                        this.visibility.dimensions = !this.visibility.dimensions;
                         cx.notify();
                     })))
-                    .child(div().flex_1().flex().justify_end().text_xs().text_color(rgb(MUTED)).child("Ziehen: drehen · Scrollen: zoomen")),
+                    .child(button("reset-view", "Zurücksetzen", false).h(px(TOGGLE_HEIGHT)).py_0().flex().items_center().text_xs().on_click(cx.listener(|this, _, _, cx| {
+                        match this.flat_view() {
+                            Some(view) => *view = PanZoom::default(),
+                            None => this.camera = Camera::default(),
+                        }
+                        cx.notify();
+                    })))
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w_0()
+                            .flex()
+                            .justify_end()
+                            .text_xs()
+                            .text_color(rgb(MUTED))
+                            .child(div().min_w_0().truncate().child(format!("{hint} · Scrollen: zoomen · Klicken: Bauteil bemaßen"))),
+                    ),
             )
             .child(
                 div()
@@ -615,28 +700,134 @@ impl Converter {
                     .min_h_0()
                     .relative()
                     .overflow_hidden()
-                    .bg(rgb(0xfafbfc))
-                    .on_mouse_down(MouseButton::Left, cx.listener(|this, e: &MouseDownEvent, _, _| this.drag = Some(e.position)))
+                    .bg(rgb(scene::BACKGROUND))
+                    .on_mouse_down(MouseButton::Left, cx.listener(|this, e: &MouseDownEvent, _, _| {
+                        this.drag = Some(e.position);
+                        this.press = Some(e.position);
+                    }))
                     .on_mouse_move(cx.listener(|this, e: &MouseMoveEvent, _, cx| {
                         let (Some(from), Some(MouseButton::Left)) = (this.drag, e.pressed_button) else {
                             this.drag = None;
                             return;
                         };
+                        if this.press.is_some_and(|p| {
+                            let d = e.position - p;
+                            f32::from(d.x).abs() + f32::from(d.y).abs() > 3.0
+                        }) {
+                            this.press = None;
+                        }
                         let d = e.position - from;
-                        this.camera.yaw -= f32::from(d.x) * 0.008;
-                        this.camera.pitch = (this.camera.pitch + f32::from(d.y) * 0.008).clamp(-0.2, 1.5);
+                        let (dx, dy) = (f32::from(d.x), f32::from(d.y));
+                        match this.flat_view() {
+                            Some(view) => view.pan = [view.pan[0] + dx, view.pan[1] + dy],
+                            None => {
+                                this.camera.yaw -= dx * 0.008;
+                                this.camera.pitch = (this.camera.pitch + dy * 0.008).clamp(-0.2, 1.5);
+                            }
+                        }
                         this.drag = Some(e.position);
                         cx.notify();
                     }))
-                    .on_mouse_up(MouseButton::Left, cx.listener(|this, _, _, _| this.drag = None))
+                    .on_mouse_up(MouseButton::Left, cx.listener(|this, e: &MouseUpEvent, _, cx| {
+                        this.drag = None;
+                        if this.press.take().is_some()
+                            && let State::Done(done) = &this.state
+                        {
+                            this.selected = match this.model_view {
+                                ModelView::Model | ModelView::Elevation => done.scene.pick(e.position),
+                                ModelView::Plan => done.floor_plan.pick(e.position),
+                            };
+                            cx.notify();
+                        }
+                    }))
                     .on_scroll_wheel(cx.listener(|this, e: &ScrollWheelEvent, _, cx| {
-                        let dy = f32::from(e.delta.pixel_delta(px(20.)).y);
-                        this.camera.zoom = (this.camera.zoom * (1.0 + dy * 0.002)).clamp(0.3, 8.0);
+                        let factor = 1.0 + f32::from(e.delta.pixel_delta(px(20.)).y) * 0.002;
+                        match this.flat_view() {
+                            Some(view) => view.zoom_by(factor),
+                            None => this.camera.zoom = (this.camera.zoom * factor).clamp(0.3, 8.0),
+                        }
                         cx.notify();
                     }))
-                    .child(canvas(|_, _, _| {}, move |bounds, _, window, _| scene.paint(camera, &visibility, bounds, window)).size_full())
-                    .child(legend(done)),
+                    .child(
+                        canvas(|_, _, _| {}, move |bounds, _, window, cx| match view {
+                            ModelView::Model => scene.paint(Scene::room_to_turn(camera, bounds.size), &visibility, selected, bounds, window, cx),
+                            ModelView::Plan => floor_plan.paint(plan_camera, &visibility, selected, beside_legend(bounds), window, cx),
+                            ModelView::Elevation => {
+                                let bounds = beside_legend(bounds);
+                                scene.paint(scene.fit_shown(elevation, &visibility, bounds.size), &visibility, selected, bounds, window, cx)
+                            }
+                        })
+                        .size_full(),
+                    )
+                    .child(legend(done, plan))
+                    .when_some(self.selection(done, cx), |d, card| d.child(card)),
             )
+    }
+
+    /// The pan and zoom of the floor plan or the elevation, whichever is shown.
+    fn flat_view(&mut self) -> Option<&mut PanZoom> {
+        match self.model_view {
+            ModelView::Model => None,
+            ModelView::Plan => Some(&mut self.plan_camera),
+            ModelView::Elevation => Some(&mut self.elevation_camera),
+        }
+    }
+
+    /// What the model tab shows: the floor plan only its one storey.
+    fn shown(&self) -> Visibility {
+        match self.model_view {
+            ModelView::Model | ModelView::Elevation => self.visibility.clone(),
+            ModelView::Plan => Visibility { storeys: (0..self.visibility.storeys.len()).map(|i| i == self.plan_storey).collect(), ..self.visibility.clone() },
+        }
+    }
+
+    /// Switches between the 3D model, the floor plan and an elevation. The plan opens on the
+    /// storey of the selected element, or else on the lowest storey the model shows.
+    fn show_model_view(&mut self, view: ModelView) {
+        if view == ModelView::Plan
+            && self.model_view != view
+            && let State::Done(done) = &self.state
+        {
+            let storey = self.selected.filter(|&i| done.scene.shows(i, &self.visibility)).map(|i| done.scene.element(i).0);
+            self.plan_storey = storey.or_else(|| self.visibility.storeys.iter().position(|&v| v)).unwrap_or(self.plan_storey);
+        }
+        self.model_view = view;
+    }
+
+    /// Which element is selected, with a button to clear the selection.
+    fn selection(&self, done: &Done, cx: &mut Context<Self>) -> Option<impl IntoElement> {
+        let item = self.selected.filter(|&i| done.scene.shows(i, &self.shown()))?;
+        let (storey, index) = done.scene.element(item);
+        let e = done.conversion.building.storeys.get(storey)?.elements.get(index)?;
+        Some(
+            div()
+                .id("selection")
+                .absolute()
+                .top_3()
+                .right_3()
+                .flex()
+                .items_start()
+                .gap_3()
+                .p_2()
+                .rounded_md()
+                .bg(rgb(PANEL))
+                .border_1()
+                .border_color(rgb(ACCENT))
+                .text_xs()
+                // Not a click on the model behind it.
+                .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+                .child(
+                    div()
+                        .flex()
+                        .flex_col()
+                        .child(div().font_weight(FontWeight::SEMIBOLD).child(e.name.clone()))
+                        .child(div().text_color(rgb(MUTED)).child(format!("{} · {} m² netto", e.id, de(e.net_area, 2)))),
+                )
+                .child(div().id("deselect").text_color(rgb(MUTED)).cursor_pointer().child("✕").on_click(cx.listener(|this, _, _, cx| {
+                    this.selected = None;
+                    cx.notify();
+                }))),
+        )
     }
 }
 
@@ -781,14 +972,32 @@ fn plan_view(image: Option<Arc<RenderImage>>) -> impl IntoElement {
         .into_any_element()
 }
 
-fn legend(done: &Done) -> impl IntoElement {
+/// Widest the legend gets; the flat views are fitted to the right of it.
+const LEGEND_WIDTH: f32 = 180.;
+
+/// The part of the canvas beside the legend, which covers its lower left; a
+/// narrow canvas is left whole, as the view would get too small.
+fn beside_legend(bounds: Bounds<Pixels>) -> Bounds<Pixels> {
+    if bounds.size.width < px(720.) {
+        return bounds;
+    }
+    let left = px(LEGEND_WIDTH + 12.);
+    Bounds::new(bounds.origin + point(left, px(0.)), size(bounds.size.width - left, bounds.size.height))
+}
+
+/// The colors of the model; the floor plan also marks its openings.
+fn legend(done: &Done, plan: bool) -> impl IntoElement {
     let walls = done.conversion.colors().iter().map(|(name, color)| (name.clone(), scene::hex(color)));
-    let entries: Vec<(String, u32)> =
-        walls.chain([("Decken".to_string(), scene::SLAB_COLOR), ("Dach".to_string(), scene::ROOF_COLOR)]).collect();
+    let openings = [("Türen", OpeningKind::Door), ("Fenster", OpeningKind::Window)].map(|(name, kind)| (name.to_string(), floor_plan::opening_color(kind)));
+    let entries: Vec<(String, u32)> = walls
+        .chain([("Decken".to_string(), scene::SLAB_COLOR), ("Dach".to_string(), scene::ROOF_COLOR)])
+        .chain(openings.into_iter().filter(|_| plan))
+        .collect();
     div()
         .absolute()
         .left_3()
         .bottom_3()
+        .max_w(px(LEGEND_WIDTH))
         .flex()
         .flex_col()
         .gap_1()
@@ -799,7 +1008,7 @@ fn legend(done: &Done) -> impl IntoElement {
         .border_color(rgb(BORDER))
         .text_xs()
         .children(entries.into_iter().map(|(name, color)| {
-            div().flex().items_center().gap_2().child(div().size(px(10.)).rounded_sm().bg(rgb(color))).child(name)
+            div().flex().items_center().gap_2().child(div().flex_none().size(px(10.)).rounded_sm().bg(rgb(color))).child(div().min_w_0().truncate().child(name))
         }))
 }
 
@@ -836,6 +1045,69 @@ fn button(id: &'static str, label: &'static str, primary: bool) -> gpui::Statefu
         .cursor_pointer()
         .when(primary, |d| d.bg(rgb(TEXT)).border_color(rgb(TEXT)).text_color(rgb(0xffffff)).hover(|s| s.bg(rgb(PRIMARY_HOVER))))
         .when(!primary, |d| d.bg(rgb(PANEL)).border_color(rgb(BORDER)).hover(|s| s.bg(rgb(SUNKEN))))
+        .child(label)
+}
+
+/// A small "i" that explains `text` when the pointer rests on it.
+fn info(id: &'static str, text: &'static str) -> gpui::Stateful<gpui::Div> {
+    div()
+        .id(id)
+        .flex_none()
+        .size(px(16.))
+        .flex()
+        .items_center()
+        .justify_center()
+        .rounded_full()
+        .border_1()
+        .border_color(rgb(CONTROL_BORDER))
+        .text_color(rgb(MUTED))
+        .text_size(px(10.))
+        .font_weight(FontWeight::SEMIBOLD)
+        .hover(|s| s.border_color(rgb(ACCENT)).text_color(rgb(ACCENT)))
+        .child("i")
+        .tooltip(move |_, cx| cx.new(|_| Tip(text)).into())
+}
+
+/// The box an [`info`] shows.
+struct Tip(&'static str);
+
+impl Render for Tip {
+    fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+        div()
+            .max_w(px(280.))
+            .px_2p5()
+            .py_2()
+            .rounded_md()
+            .bg(rgb(PANEL))
+            .border_1()
+            .border_color(rgb(BORDER))
+            .shadow_md()
+            .text_xs()
+            .text_color(rgb(TEXT))
+            .child(self.0)
+    }
+}
+
+/// The sunken track of a switch, holding its [`segment`]s.
+fn track() -> gpui::Div {
+    div().flex().flex_none().h(px(TOGGLE_HEIGHT)).p(px(2.)).gap(px(2.)).rounded_md().bg(rgb(SUNKEN)).border_1().border_color(rgb(BORDER))
+}
+
+/// One choice of a switch: the chosen one raised from the sunken track.
+fn segment(id: impl Into<gpui::ElementId>, label: &'static str, on: bool) -> gpui::Stateful<gpui::Div> {
+    div()
+        .id(id)
+        .h_full()
+        .min_w(px(36.))
+        .px_2()
+        .flex()
+        .items_center()
+        .justify_center()
+        .rounded(px(4.))
+        .cursor_pointer()
+        .text_xs()
+        .when(on, |d| d.bg(rgb(PANEL)).text_color(rgb(ACCENT)).font_weight(FontWeight::SEMIBOLD).shadow_sm())
+        .when(!on, |d| d.text_color(rgb(MUTED)).hover(|s| s.text_color(rgb(TEXT))))
         .child(label)
 }
 
@@ -948,9 +1220,16 @@ fn main() {
                     let mut view = Converter {
                         state: State::Empty,
                         tab: Tab::Model,
+                        model_view: ModelView::Model,
                         camera: Camera::default(),
-                        visibility: Visibility { storeys: vec![], roof: true },
+                        visibility: Visibility { storeys: vec![], roof: true, dimensions: true },
+                        plan_camera: PanZoom::default(),
+                        plan_storey: 0,
+                        elevation_camera: PanZoom::default(),
+                        elevation_side: 0,
                         drag: None,
+                        press: None,
+                        selected: None,
                         summary_storey: None,
                         notice: None,
                         initial_tab,

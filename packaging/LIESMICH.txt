@@ -19,7 +19,11 @@ Benutzung
 1. Den Ordner mit den Plänen ins Fenster ziehen (oder „Ordner wählen …“).
    Unterordner werden mit gelesen; alte Planstände vorher herausnehmen.
 2. Links stehen die Mengen mit Summen je Bauteilart, oben lässt sich ein
-   Geschoss auswählen. Rechts das 3D-Modell und die Grundrisse zum Prüfen.
+   Geschoss auswählen. Rechts das Modell zum Prüfen, wahlweise als 3D,
+   Grundriss (ein Geschoss von oben) oder Ansicht (eine Seite von vorn),
+   daneben die Originalpläne mit den erkannten Bauteilen („Plan EG“ usw.).
+   Die Maße zeigen die Gesamtgröße; ein Klick auf ein Bauteil zeigt seine
+   eigenen Maße, ein Klick daneben wieder die Gesamtgröße.
 3. Die Ergebnisse liegen im Ordner „aufmass“ neben den Plänen:
      mengen.xlsx     Mengen, alle Bauteile, Öffnungen, übersprungene Teile
      mengen.x83      GAEB-Datei für PAPA
