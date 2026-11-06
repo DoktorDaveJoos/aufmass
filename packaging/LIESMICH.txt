@@ -16,8 +16,15 @@ aufmass.toml muss im selben Ordner wie die .exe liegen.
 
 Benutzung
 ---------
-1. Den Ordner mit den Plänen ins Fenster ziehen (oder „Ordner wählen …“).
-   Unterordner werden mit gelesen; alte Planstände vorher herausnehmen.
+1. Aufmaß öffnet mit dem Startfenster: links die zuletzt geöffneten Projekte,
+   rechts „Neues Projekt“ (Strg+N) und „Projekt öffnen …“ (Strg+O). Ein
+   Projekt ist eine kleine Datei (Name.aufmass, vorgeschlagen unter
+   Dokumente\Aufmaß), die sich merkt, welche Pläne dazugehören; beim Öffnen
+   werden sie neu ausgewertet.
+   Im neuen Projekt den Ordner mit den Plänen ins Fenster ziehen (oder
+   „Ordner wählen …“). Unterordner werden mit gelesen; alte Planstände vorher
+   herausnehmen. Ein Plan-Ordner, der aufs Startfenster gezogen wird, wird
+   gleich ein neues Projekt.
 2. Links stehen die Mengen mit Summen je Bauteilart, oben lässt sich ein
    Geschoss auswählen. Rechts das Modell zum Prüfen, wahlweise als 3D,
    Grundriss (ein Geschoss von oben) oder Ansicht (eine Seite von vorn),

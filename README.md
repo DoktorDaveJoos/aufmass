@@ -103,9 +103,25 @@ path = 'C:\cadwork\v30\ci.exe'
 
 ## Desktop app
 
-`app/` is a GPUI desktop app (`aufmass-app`) on top of the same library: drag a
-folder or DWG/DXF files onto the window, or use "Ordner wählen …" / "Dateien
-wählen …". It writes the same output folder and shows the quantities with
+`app/` is a GPUI desktop app (`aufmass-app`) on top of the same library. It
+opens on a start window laid out as Thermkern's (energieausweis-express,
+`desktop/`): the projects opened lately on the left, newest first and grouped
+by day, and "Neues Projekt" and "Projekt öffnen …" on the right. Arrow keys and
+Enter open a project, ⌘⌫ / Entf takes it off the list; ⌘N, ⌘O, ⌘W and ⇧⌘1
+(Strg on Windows) make, open and close projects and bring the start window
+back, and on macOS the menu Ablage › Zuletzt geöffnet lists them too.
+
+A project is a small JSON file, `<Name>.aufmass`, suggested in Dokumente/Aufmaß:
+its format, when and by which version it was made, and the plan folders or
+files evaluated last (`app/src/project.rs`). Each project opens in a window of
+its own and evaluates its plans again, so it shows their current state; closing
+the last one brings the start window back. Plans dropped onto the start window
+become a new project; in a project window, plans dropped onto it or chosen with
+"Ordner wählen …" / "Dateien wählen …" replace its plans. The recent list is
+`recent.json` beside `programme.toml` in `%APPDATA%\aufmass` (elsewhere
+`~/.config/aufmass`).
+
+A project window writes the same output folder as the command line and shows the quantities with
 subtotals per element type (for the whole building or one storey), the plan
 previews per storey ("Plan EG", …) and the model ("Modell") in three views:
 
@@ -129,11 +145,13 @@ dimensions drawn on top. The Grundriss is drawn as vectors from the wall
 footprints and the slab and roof outlines (`app/src/floor_plan.rs`).
 
 ```bash
-cargo run --release -p aufmass-app                                   # empty window
+cargo run --release -p aufmass-app                                   # start window
+cargo run --release -p aufmass-app -- ~/Dokumente/Aufmaß/Haus.aufmass  # a project
 cargo run --release -p aufmass-app -- ~/Downloads/Planeingang_17.09.2026 --tab EG
 ```
 
-`--tab <storey>` opens that plan tab after loading, for quick checks.
+Plans on the command line open in a window without a project; `--tab <storey>`
+opens that plan tab after loading, for quick checks.
 
 The app icon is the A of Inter SemiBold drawn as a measured part on blueprint
 paper. `app/assets/icon.py` writes `icon.svg` and `icon-small.svg` (16 to 32

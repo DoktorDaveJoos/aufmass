@@ -3,8 +3,12 @@
 
 mod dimension;
 mod floor_plan;
+mod places;
 mod plan;
+mod project;
+mod recent;
 mod scene;
+mod start;
 
 use aufmass::model::{Kind, OpeningKind};
 use aufmass::report::{self, de};
@@ -12,19 +16,32 @@ use aufmass::programs::{self, Program};
 use aufmass::{collect_inputs, convert_with_progress, default_out, telemetry, update, Config, Conversion, FileReport, GAEB_FILE};
 use gpui::prelude::FluentBuilder;
 use gpui::{
-    actions, canvas, div, relative, Animation, AnimationExt, ClipboardItem, img, point, px, rgb, size, App, AppContext, Application, Bounds, Context, Corners, ExternalPaths,
+    actions, canvas, Action, BorrowAppContext, Global, PromptLevel, WindowHandle, WindowId, div, relative, Animation, AnimationExt, ClipboardItem, img, point, px, rgb, size, App, AppContext, Application, Bounds, Context, Corners, ExternalPaths,
     FontWeight, Image, ImageFormat, InteractiveElement, IntoElement, KeyBinding, Menu, MenuItem, MouseButton,
     MouseDownEvent, MouseMoveEvent, MouseUpEvent, ParentElement, PathPromptOptions, Pixels, Point, Render, RenderImage,
     ScrollWheelEvent, SharedString, StatefulInteractiveElement, Styled, Task, TitlebarOptions,
     Window, WindowBounds, WindowOptions,
 };
 use floor_plan::FloorPlan;
+use project::Project;
+use recent::Recent;
 use scene::{Camera, PanZoom, Scene, Visibility};
-use std::path::PathBuf;
+use start::Start;
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::Duration;
 
-actions!(aufmass, [Quit]);
+/// The product's name; also the folder new projects are suggested in.
+pub const NAME: &str = "Aufmaß";
+
+actions!(aufmass, [Quit, NewProject, OpenProject, CloseWindow, ShowStart, ClearRecent]);
+
+/// Opens a project from the list of recent ones (the macOS menu Ablage › Zuletzt geöffnet).
+#[derive(Clone, PartialEq, Debug, Action)]
+#[action(namespace = aufmass, no_json)]
+struct OpenRecent {
+    path: PathBuf,
+}
 
 // The bauzertifikate.de design system (energieausweis-express/bauzertifikate globals.css):
 // actions are black, the brand blue is an accent.
@@ -35,10 +52,12 @@ const BORDER: u32 = 0xe5e7ec;
 const CONTROL_BORDER: u32 = 0x8a909c;
 const TEXT: u32 = 0x0f1219;
 const MUTED: u32 = 0x596070;
+const FAINT: u32 = 0xa0a6b1;
 const PRIMARY_HOVER: u32 = 0x2a2f3a;
 const ACCENT: u32 = 0x0000bd;
 const ACCENT_SOFT: u32 = 0xebebf9;
 const DANGER: u32 = 0xb42318;
+const DANGER_SOFT: u32 = 0xfdf0ef;
 
 /// The bauzertifikate.de mark, upright, about 2:3.
 const MARK: &str = include_str!("../assets/mark.svg");
@@ -134,13 +153,59 @@ struct Converter {
     notice: Option<String>,
     /// Tab to show after the first conversion (`--tab` on the command line).
     initial_tab: Option<String>,
-    app_update: Option<AppUpdate>,
+    /// The project file and what it holds; none for plans opened from the command line.
+    file: Option<(PathBuf, Project)>,
     _task: Option<Task<()>>,
     _progress_task: Option<Task<()>>,
-    _update_task: Option<Task<()>>,
 }
 
 impl Converter {
+    fn new(file: Option<(PathBuf, Project)>, initial_tab: Option<String>, cx: &mut Context<Self>) -> Converter {
+        cx.observe_global::<Updates>(|_, cx| cx.notify()).detach();
+        Converter {
+            state: State::Empty,
+            tab: Tab::Model,
+            model_view: ModelView::Model,
+            camera: Camera::default(),
+            visibility: Visibility { storeys: vec![], roof: true, dimensions: true },
+            plan_camera: PanZoom::default(),
+            plan_storey: 0,
+            elevation_camera: PanZoom::default(),
+            elevation_side: 0,
+            drag: None,
+            press: None,
+            selected: None,
+            summary_storey: None,
+            notice: None,
+            initial_tab,
+            file,
+            _task: None,
+            _progress_task: None,
+        }
+    }
+
+    /// Project files open in windows of their own; plans are evaluated here.
+    fn dropped(&mut self, paths: Vec<PathBuf>, cx: &mut Context<Self>) {
+        let (projects, plans): (Vec<PathBuf>, Vec<PathBuf>) = paths.into_iter().partition(|p| places::is_project(p));
+        for path in projects {
+            if let Err(e) = open_project(&path, cx) {
+                report(&path, e, cx);
+            }
+        }
+        self.start(plans, cx);
+    }
+
+    /// Keeps the plans just evaluated in the project file.
+    fn remember_plans(&mut self, plans: Vec<PathBuf>) {
+        let Some((path, project)) = &mut self.file else { return };
+        if project.plans != plans {
+            project.plans = plans;
+            if let Err(e) = project.save(path) {
+                self.notice = Some(e);
+            }
+        }
+    }
+
     fn start(&mut self, paths: Vec<PathBuf>, cx: &mut Context<Self>) {
         if paths.is_empty() {
             return;
@@ -148,6 +213,7 @@ impl Converter {
         let progress = Arc::new(Mutex::new(Progress { step: "Pläne werden gesucht …".into(), detail: None, done: 0, total: 1 }));
         self.state = State::Working(progress.clone());
         self.notice = None;
+        let chosen = paths.clone();
         let job = cx.background_executor().spawn(async move { run(paths, &progress) });
         // The conversion cannot notify the view from its thread; redraw until it is done.
         self._progress_task = Some(cx.spawn(async move |this, cx| loop {
@@ -175,6 +241,7 @@ impl Converter {
                         Some(t) => done.plans.iter().position(|(n, _)| n.eq_ignore_ascii_case(&t)).map_or(Tab::Model, Tab::Plan),
                         None => Tab::Model,
                     };
+                    this.remember_plans(chosen);
                 }
                 this.state = state;
                 cx.notify();
@@ -280,52 +347,6 @@ impl Converter {
         cx.notify();
     }
 
-    fn check_for_update(&mut self, cx: &mut Context<Self>) {
-        let job = cx.background_executor().spawn(async { update::check() });
-        self._update_task = Some(cx.spawn(async move |this, cx| {
-            // Offline or GitHub unreachable: asked again on the next start.
-            if let Ok(Some(release)) = job.await {
-                this.update(cx, |this, cx| {
-                    this.app_update = Some(AppUpdate::Available(release));
-                    cx.notify();
-                })
-                .ok();
-            }
-        }));
-    }
-
-    fn install_update(&mut self, cx: &mut Context<Self>) {
-        let Some(AppUpdate::Available(release)) = self.app_update.take() else { return };
-        self.app_update = Some(AppUpdate::Installing(release.version.clone()));
-        let job = cx.background_executor().spawn(async move { (update::install(&release), release.version) });
-        self._update_task = Some(cx.spawn(async move |this, cx| {
-            let (result, version) = job.await;
-            this.update(cx, |this, cx| {
-                this.app_update = Some(match result {
-                    Ok(exe) => AppUpdate::Installed { version, exe },
-                    Err(e) => {
-                        telemetry::update_failed(&e);
-                        AppUpdate::Failed(format!("Update auf {version} fehlgeschlagen: {e:#}"))
-                    }
-                });
-                cx.notify();
-            })
-            .ok();
-        }));
-        cx.notify();
-    }
-
-    /// Starts the new version and closes this one; the results are saved already.
-    fn restart(&mut self, exe: PathBuf, cx: &mut Context<Self>) {
-        match std::process::Command::new(&exe).spawn() {
-            Ok(_) => cx.quit(),
-            Err(e) => {
-                self.app_update = Some(AppUpdate::Failed(format!("Aufmaß konnte nicht neu gestartet werden: {e}. Bitte von Hand neu starten.")));
-                cx.notify();
-            }
-        }
-    }
-
     fn choose(&mut self, directories: bool, cx: &mut Context<Self>) {
         let picked = cx.prompt_for_paths(PathPromptOptions {
             files: !directories,
@@ -410,10 +431,10 @@ impl Render for Converter {
             .bg(rgb(BG))
             .text_color(rgb(TEXT))
             .text_sm()
-            .on_drop(cx.listener(|this, paths: &ExternalPaths, _, cx| this.start(paths.paths().to_vec(), cx)))
+            .on_drop(cx.listener(|this, paths: &ExternalPaths, _, cx| this.dropped(paths.paths().to_vec(), cx)))
             .drag_over::<ExternalPaths>(|style, _, _, _| style.bg(rgb(ACCENT_SOFT)))
             .child(self.header(cx))
-            .when_some(self.update_bar(cx), |d, bar| d.child(bar))
+            .when_some(update_bar(cx), |d, bar| d.child(bar))
             .when_some(self.notice.clone(), |d, notice| {
                 d.child(
                     div()
@@ -453,7 +474,9 @@ impl Converter {
             .bg(rgb(PANEL))
             .border_b_1()
             .border_color(rgb(BORDER))
-            .child(logo())
+            .child(div().flex().items_center().gap_4().child(logo()).when_some(self.file.as_ref().map(|(path, _)| places::stem(path)), |d, name| {
+                d.child(div().pl_4().border_l_1().border_color(rgb(BORDER)).font_weight(FontWeight::SEMIBOLD).child(name))
+            }))
             .child(
                 div()
                     .flex()
@@ -468,30 +491,6 @@ impl Converter {
                     .child(button("pick-dir", "Ordner wählen …", false).on_click(cx.listener(|this, _, _, cx| this.choose(true, cx))))
                     .child(button("pick-files", "Dateien wählen …", false).on_click(cx.listener(|this, _, _, cx| this.choose(false, cx)))),
             )
-    }
-
-    fn update_bar(&self, cx: &mut Context<Self>) -> Option<impl IntoElement> {
-        let bar = div().flex().items_center().gap_3().px_4().py_2().bg(rgb(ACCENT_SOFT)).border_b_1().border_color(rgb(BORDER));
-        let dismiss = || {
-            div().id("dismiss-update").text_color(rgb(MUTED)).cursor_pointer().child("✕").on_click(cx.listener(|this, _, _, cx| {
-                this.app_update = None;
-                cx.notify();
-            }))
-        };
-        Some(match self.app_update.as_ref()? {
-            AppUpdate::Available(release) => bar
-                .child(div().flex_1().child(format!("Aufmaß {} ist verfügbar (installiert: {}).", release.version, update::VERSION)))
-                .child(button("install-update", "Jetzt aktualisieren", true).on_click(cx.listener(|this, _, _, cx| this.install_update(cx))))
-                .child(dismiss()),
-            AppUpdate::Installing(version) => bar.child(div().flex_1().text_color(rgb(MUTED)).child(format!("Aufmaß {version} wird geladen …"))),
-            AppUpdate::Installed { version, exe } => {
-                let exe = exe.clone();
-                bar.child(div().flex_1().child(format!("Aufmaß {version} ist installiert und startet nach einem Neustart.")))
-                    .child(button("restart", "Neu starten", true).on_click(cx.listener(move |this, _, _, cx| this.restart(exe.clone(), cx))))
-                    .child(dismiss())
-            }
-            AppUpdate::Failed(message) => bar.child(div().flex_1().text_color(rgb(DANGER)).child(message.clone())).child(dismiss()),
-        })
     }
 
     fn empty(&self, cx: &mut Context<Self>) -> impl IntoElement {
@@ -1180,6 +1179,295 @@ fn centered(child: impl IntoElement) -> gpui::Div {
     div().size_full().flex().items_center().justify_center().child(child)
 }
 
+/// The windows open: the start window, while shown, and one per open project,
+/// or per set of plans opened from the command line.
+#[derive(Default)]
+struct Windows {
+    start: Option<WindowHandle<Start>>,
+    projects: Vec<(Option<PathBuf>, WindowHandle<Converter>)>,
+}
+
+impl Global for Windows {}
+
+/// Shows the start window, opening it if it is closed.
+fn show_start(cx: &mut App) {
+    if let Some(start) = cx.global::<Windows>().start
+        && start.update(cx, |_, window, _| window.activate_window()).is_ok()
+    {
+        return;
+    }
+    let bounds = Bounds::centered(None, size(px(980.), px(620.)), cx);
+    let start = cx
+        .open_window(
+            WindowOptions {
+                window_bounds: Some(WindowBounds::Windowed(bounds)),
+                titlebar: Some(TitlebarOptions { title: Some(NAME.into()), ..Default::default() }),
+                window_min_size: Some(size(px(780.), px(500.))),
+                ..Default::default()
+            },
+            |window, cx| cx.new(|cx| Start::new(window, cx)),
+        )
+        .expect("opening the start window failed");
+    cx.global_mut::<Windows>().start = Some(start);
+    cx.activate(true);
+}
+
+/// Opens a window evaluating `plans`, for the project in `file` if there is one.
+fn open_window(file: Option<(PathBuf, Project)>, plans: Vec<PathBuf>, initial_tab: Option<String>, cx: &mut App) -> Result<(), String> {
+    let path = file.as_ref().map(|(path, _)| path.clone());
+    let title = match &path {
+        Some(path) => format!("{} – {NAME}", places::stem(path)),
+        None => NAME.to_string(),
+    };
+    let bounds = Bounds::centered(None, size(px(1440.), px(920.)), cx);
+    let window = cx
+        .open_window(
+            WindowOptions {
+                window_bounds: Some(WindowBounds::Windowed(bounds)),
+                titlebar: Some(TitlebarOptions { title: Some(title.into()), ..Default::default() }),
+                window_min_size: Some(size(px(960.), px(600.))),
+                ..Default::default()
+            },
+            move |_, cx| {
+                cx.new(move |cx| {
+                    let mut view = Converter::new(file, initial_tab, cx);
+                    view.start(plans, cx);
+                    view
+                })
+            },
+        )
+        .map_err(|e| e.to_string())?;
+    cx.global_mut::<Windows>().projects.push((path, window));
+    Ok(())
+}
+
+/// Opens a project file in a window of its own, or brings its window forward if it
+/// is open, and closes the start window. The error says why it could not be opened.
+fn open_project(path: &Path, cx: &mut App) -> Result<(), String> {
+    let open = cx.global::<Windows>().projects.iter().find(|(p, _)| p.as_deref().is_some_and(|p| places::same(p, path))).map(|(_, w)| *w);
+    if let Some(window) = open {
+        window.update(cx, |_, window, _| window.activate_window()).map_err(|e| e.to_string())?;
+        close_start(cx);
+        return Ok(());
+    }
+    let project = Project::open(path)?;
+    let plans = project.plans.clone();
+    open_window(Some((path.to_owned(), project)), plans, None, cx)?;
+    cx.add_recent_document(path);
+    update_recent(cx, |recent| recent.touch(path, &places::stem(path), jiff::Timestamp::now().as_second()));
+    close_start(cx);
+    cx.activate(true);
+    Ok(())
+}
+
+/// Closes the start window once the current event is handled, which may be one of its own.
+fn close_start(cx: &mut App) {
+    if let Some(start) = cx.global_mut::<Windows>().start.take() {
+        cx.defer(move |cx| {
+            start.update(cx, |_, window, _| window.remove_window()).ok();
+        });
+    }
+}
+
+/// Asks where to create a new project, in Dokumente/Aufmaß and named after its plans
+/// if there are any, creates it with them and opens it.
+fn new_project(plans: Vec<PathBuf>, cx: &mut App) {
+    let dir = places::projects();
+    let name = places::name_for_plans(&plans);
+    let picked = cx.prompt_for_new_path(&dir, Some(&places::free_name(&dir, if name.is_empty() { "Neues Projekt" } else { &name })));
+    cx.spawn(async move |cx| {
+        let Ok(Ok(Some(path))) = picked.await else { return };
+        cx.update(|cx| {
+            let path = places::with_extension(path);
+            if cx.global::<Windows>().projects.iter().any(|(p, _)| p.as_deref().is_some_and(|p| places::same(p, &path))) {
+                return report(&path, "Das Projekt ist gerade geöffnet und kann nicht ersetzt werden.".into(), cx);
+            }
+            let mut project = Project::new(update::VERSION, jiff::Timestamp::now().as_second());
+            project.plans = plans;
+            if let Err(e) = project.save(&path).and_then(|()| open_project(&path, cx)) {
+                report(&path, e, cx);
+            }
+        })
+        .ok();
+    })
+    .detach();
+}
+
+/// Asks for project files and opens them.
+fn open_dialog(cx: &mut App) {
+    let picked = cx.prompt_for_paths(PathPromptOptions { files: true, directories: false, multiple: true, prompt: Some("Öffnen".into()) });
+    cx.spawn(async move |cx| {
+        let Ok(Ok(Some(paths))) = picked.await else { return };
+        cx.update(|cx| {
+            for path in paths {
+                if let Err(e) = open_project(&path, cx) {
+                    report(&path, e, cx);
+                }
+            }
+        })
+        .ok();
+    })
+    .detach();
+}
+
+/// The message for a project that could not be opened.
+fn failed(path: &Path, error: &str) -> String {
+    format!("„{}“ lässt sich nicht öffnen. {error}", places::stem(path))
+}
+
+/// Says that a project could not be opened: in the start window if it is shown,
+/// below what it shows already, else in a dialog over the window in front.
+fn report(path: &Path, error: String, cx: &mut App) {
+    let message = failed(path, &error);
+    if let Some(start) = cx.global::<Windows>().start {
+        let shown = start.update(cx, |start, window, cx| {
+            start.error = Some(match start.error.take() {
+                Some(shown) => format!("{shown}\n{message}"),
+                None => message.clone(),
+            });
+            window.activate_window();
+            cx.notify();
+        });
+        if shown.is_ok() {
+            return;
+        }
+    }
+    match cx.active_window() {
+        Some(window) => {
+            window
+                .update(cx, |_, window, cx| {
+                    drop(window.prompt(PromptLevel::Warning, &message, None, &["OK"], cx));
+                })
+                .ok();
+        }
+        None => {
+            show_start(cx);
+            if let Some(start) = cx.global::<Windows>().start {
+                start.update(cx, |start, _, _| start.error = Some(message)).ok();
+            }
+        }
+    }
+}
+
+/// Takes a project off the recent list.
+fn forget(path: &Path, cx: &mut App) {
+    update_recent(cx, |recent| recent.remove(path));
+}
+
+/// Changes the recent list, keeps it, and rebuilds the menu that lists it.
+fn update_recent(cx: &mut App, change: impl FnOnce(&mut Recent)) {
+    cx.update_global::<Recent, _>(|recent, _| {
+        change(recent);
+        if let Err(e) = recent.save() {
+            eprintln!("{NAME}: the recent list could not be saved: {e}");
+        }
+    });
+    set_menus(cx);
+}
+
+/// The menu bar (macOS only: GPUI shows none on Windows, where the start window and shortcuts do the same).
+fn set_menus(cx: &mut App) {
+    let mut file = vec![MenuItem::action("Neues Projekt …", NewProject), MenuItem::action("Öffnen …", OpenProject)];
+    let recent = &cx.global::<Recent>().entries;
+    if !recent.is_empty() {
+        let mut items: Vec<MenuItem> = recent.iter().take(10).map(|e| MenuItem::action(e.name.clone(), OpenRecent { path: e.path.clone() })).collect();
+        items.extend([MenuItem::separator(), MenuItem::action("Liste leeren", ClearRecent)]);
+        file.push(MenuItem::submenu(Menu { name: "Zuletzt geöffnet".into(), items }));
+    }
+    file.extend([MenuItem::separator(), MenuItem::action("Fenster schließen", CloseWindow)]);
+    cx.set_menus(vec![
+        Menu { name: NAME.into(), items: vec![MenuItem::action(format!("{NAME} beenden"), Quit)] },
+        Menu { name: "Ablage".into(), items: file },
+        Menu { name: "Fenster".into(), items: vec![MenuItem::action("Startfenster", ShowStart)] },
+    ]);
+}
+
+/// The shortcuts: the platform's own modifier, plus Windows' Strg+F4 for closing a document window.
+fn bind_keys(cx: &mut App) {
+    let key = |mac: &'static str, other: &'static str| if cfg!(target_os = "macos") { mac } else { other };
+    cx.bind_keys([
+        KeyBinding::new(key("cmd-q", "ctrl-q"), Quit, None),
+        KeyBinding::new(key("cmd-n", "ctrl-n"), NewProject, None),
+        KeyBinding::new(key("cmd-o", "ctrl-o"), OpenProject, None),
+        KeyBinding::new(key("cmd-w", "ctrl-w"), CloseWindow, None),
+        KeyBinding::new(key("cmd-shift-1", "ctrl-shift-1"), ShowStart, None),
+        KeyBinding::new("up", start::SelectPrevious, Some("Start")),
+        KeyBinding::new("down", start::SelectNext, Some("Start")),
+        KeyBinding::new("enter", start::Confirm, Some("Start")),
+        KeyBinding::new(key("cmd-backspace", "delete"), start::Forget, Some("Start")),
+    ]);
+    if !cfg!(target_os = "macos") {
+        cx.bind_keys([KeyBinding::new("ctrl-f4", CloseWindow, None)]);
+    }
+}
+
+/// A newer release on GitHub, shown in a bar in every window.
+#[derive(Default)]
+struct Updates(Option<AppUpdate>);
+
+impl Global for Updates {}
+
+fn set_update(update: Option<AppUpdate>, cx: &mut App) {
+    cx.update_global::<Updates, _>(|updates, _| updates.0 = update);
+}
+
+/// Asks GitHub for a newer release; offline or unreachable, it is asked again on the next start.
+fn check_for_update(cx: &mut App) {
+    let job = cx.background_executor().spawn(async { update::check() });
+    cx.spawn(async move |cx| {
+        if let Ok(Some(release)) = job.await {
+            cx.update(|cx| set_update(Some(AppUpdate::Available(release)), cx)).ok();
+        }
+    })
+    .detach();
+}
+
+fn install_update(cx: &mut App) {
+    let Some(AppUpdate::Available(release)) = cx.global_mut::<Updates>().0.take() else { return };
+    set_update(Some(AppUpdate::Installing(release.version.clone())), cx);
+    let job = cx.background_executor().spawn(async move { (update::install(&release), release.version) });
+    cx.spawn(async move |cx| {
+        let (result, version) = job.await;
+        let update = match result {
+            Ok(exe) => AppUpdate::Installed { version, exe },
+            Err(e) => {
+                telemetry::update_failed(&e);
+                AppUpdate::Failed(format!("Update auf {version} fehlgeschlagen: {e:#}"))
+            }
+        };
+        cx.update(|cx| set_update(Some(update), cx)).ok();
+    })
+    .detach();
+}
+
+/// Starts the new version and closes this one; the results are saved already.
+fn restart(exe: &Path, cx: &mut App) {
+    match std::process::Command::new(exe).spawn() {
+        Ok(_) => cx.quit(),
+        Err(e) => set_update(Some(AppUpdate::Failed(format!("Aufmaß konnte nicht neu gestartet werden: {e}. Bitte von Hand neu starten."))), cx),
+    }
+}
+
+/// The bar about a newer release, under a window's header, while there is one.
+fn update_bar(cx: &App) -> Option<impl IntoElement + use<>> {
+    let bar = div().flex().items_center().gap_3().px_4().py_2().bg(rgb(ACCENT_SOFT)).border_b_1().border_color(rgb(BORDER));
+    let dismiss = || div().id("dismiss-update").text_color(rgb(MUTED)).cursor_pointer().child("✕").on_click(|_, _, cx| set_update(None, cx));
+    Some(match cx.global::<Updates>().0.as_ref()? {
+        AppUpdate::Available(release) => bar
+            .child(div().flex_1().child(format!("Aufmaß {} ist verfügbar (installiert: {}).", release.version, update::VERSION)))
+            .child(button("install-update", "Jetzt aktualisieren", true).on_click(|_, _, cx| install_update(cx)))
+            .child(dismiss()),
+        AppUpdate::Installing(version) => bar.child(div().flex_1().text_color(rgb(MUTED)).child(format!("Aufmaß {version} wird geladen …"))),
+        AppUpdate::Installed { version, exe } => {
+            let exe = exe.clone();
+            bar.child(div().flex_1().child(format!("Aufmaß {version} ist installiert und startet nach einem Neustart.")))
+                .child(button("restart", "Neu starten", true).on_click(move |_, _, cx| restart(&exe, cx)))
+                .child(dismiss())
+        }
+        AppUpdate::Failed(message) => bar.child(div().flex_1().text_color(rgb(DANGER)).child(message.clone())).child(dismiss()),
+    })
+}
+
 fn main() {
     // Crashes and failed conversions; the window has no console to print them to.
     let _sentry = telemetry::init("app");
@@ -1194,61 +1482,77 @@ fn main() {
         }
     }
 
-    Application::new().run(move |cx: &mut App| {
+    let app = Application::new().with_assets(start::Assets);
+    // macOS: a click on the Dock icon with every window closed.
+    app.on_reopen(|cx| {
+        if cx.windows().is_empty() {
+            show_start(cx);
+        }
+    });
+    app.run(move |cx: &mut App| {
         #[cfg(target_os = "macos")]
         set_dock_icon();
+        cx.set_global(Windows::default());
+        cx.set_global(Updates::default());
+        cx.set_global(Recent::load(places::settings().map(|d| d.join("recent.json"))));
+        bind_keys(cx);
+        set_menus(cx);
         cx.on_action(|_: &Quit, cx| cx.quit());
-        cx.bind_keys([KeyBinding::new(if cfg!(target_os = "macos") { "cmd-q" } else { "ctrl-q" }, Quit, None)]);
-        cx.set_menus(vec![Menu { name: "Aufmaß".into(), items: vec![MenuItem::action("Aufmaß beenden", Quit)] }]);
+        cx.on_action(|_: &NewProject, cx| new_project(Vec::new(), cx));
+        cx.on_action(|_: &OpenProject, cx| open_dialog(cx));
+        cx.on_action(|_: &ShowStart, cx| show_start(cx));
+        cx.on_action(|action: &OpenRecent, cx| {
+            if let Err(e) = open_project(&action.path, cx) {
+                report(&action.path, e, cx);
+            }
+        });
+        cx.on_action(|_: &ClearRecent, cx| update_recent(cx, Recent::clear));
+        cx.on_action(|_: &CloseWindow, cx| {
+            if let Some(window) = cx.active_window() {
+                cx.defer(move |cx| {
+                    window.update(cx, |_, window, _| window.remove_window()).ok();
+                });
+            }
+        });
         cx.on_window_closed(|cx| {
-            if cx.windows().is_empty() {
-                cx.quit();
+            let open: Vec<WindowId> = cx.windows().iter().map(|w| w.window_id()).collect();
+            let windows = cx.global_mut::<Windows>();
+            let start_closed = windows.start.is_some_and(|s| !open.contains(&s.window_id()));
+            if start_closed {
+                windows.start = None;
+            }
+            windows.projects.retain(|(_, w)| open.contains(&w.window_id()));
+            if open.is_empty() {
+                if start_closed { cx.quit() } else { show_start(cx) }
             }
         })
         .detach();
 
-        let bounds = Bounds::centered(None, size(px(1440.), px(920.)), cx);
-        cx.open_window(
-            WindowOptions {
-                window_bounds: Some(WindowBounds::Windowed(bounds)),
-                titlebar: Some(TitlebarOptions { title: Some("Aufmaß".into()), ..Default::default() }),
-                window_min_size: Some(size(px(960.), px(600.))),
-                ..Default::default()
-            },
-            move |_, cx| {
-                cx.new(move |cx| {
-                    let mut view = Converter {
-                        state: State::Empty,
-                        tab: Tab::Model,
-                        model_view: ModelView::Model,
-                        camera: Camera::default(),
-                        visibility: Visibility { storeys: vec![], roof: true, dimensions: true },
-                        plan_camera: PanZoom::default(),
-                        plan_storey: 0,
-                        elevation_camera: PanZoom::default(),
-                        elevation_side: 0,
-                        drag: None,
-                        press: None,
-                        selected: None,
-                        summary_storey: None,
-                        notice: None,
-                        initial_tab,
-                        app_update: None,
-                        _task: None,
-                        _progress_task: None,
-                        _update_task: None,
-                    };
-                    view.start(paths, cx);
-                    // Development builds would offer to replace themselves with the
-                    // release; they only check a test server (AUFMASS_RELEASES_API).
-                    if !cfg!(debug_assertions) || std::env::var_os("AUFMASS_RELEASES_API").is_some() {
-                        view.check_for_update(cx);
-                    }
-                    view
-                })
-            },
-        )
-        .expect("opening the window failed");
+        // Project files named on the command line open as projects, as Windows passes a double-clicked
+        // file; plans open in a window of their own, without a project; the start window otherwise.
+        let (projects, plans): (Vec<PathBuf>, Vec<PathBuf>) = paths.into_iter().partition(|p| places::is_project(p));
+        let mut errors = Vec::new();
+        for path in projects {
+            if let Err(e) = open_project(&path, cx) {
+                errors.push((path, e));
+            }
+        }
+        if !plans.is_empty()
+            && let Err(e) = open_window(None, plans, initial_tab, cx)
+        {
+            eprintln!("{NAME}: opening the window failed: {e}");
+        }
+        if cx.global::<Windows>().projects.is_empty() {
+            show_start(cx);
+        }
+        for (path, e) in errors {
+            report(&path, e, cx);
+        }
+        // Development builds would offer to replace themselves with the
+        // release; they only check a test server (AUFMASS_RELEASES_API).
+        if !cfg!(debug_assertions) || std::env::var_os("AUFMASS_RELEASES_API").is_some() {
+            check_for_update(cx);
+        }
         cx.activate(true);
     });
 }

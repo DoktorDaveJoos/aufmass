@@ -12,9 +12,15 @@ path = "src/main.rs"
 [dependencies]
 anyhow = "1.0.104"
 aufmass = { path = ".." }
+# Where Documents is on each platform (known folders on Windows, OneDrive included), as in Thermkern.
+dirs = "=7.0.0"
 gpui = "=0.2.2"
 image = { version = "0.25", default-features = false }
+# Local time with the system's time zone for the recent list, also on Windows (tzdb bundled there), as in Thermkern.
+jiff = "=0.2.38"
 resvg = "0.45"
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = "1.0.154"
 
 # Compile the Metal shaders at startup, so building needs no Xcode Metal toolchain.
 [target.'cfg(target_os = "macos")'.dependencies]
