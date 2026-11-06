@@ -27,7 +27,7 @@ members = [".", "app"]
 
 # One version for the CLI and the app; a release tag vX.Y.Z must match it.
 [workspace.package]
-version = "0.3.2"
+version = "0.4.0"
 
 [profile.release]
 lto = "thin"
