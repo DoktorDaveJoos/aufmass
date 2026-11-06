@@ -1,5 +1,10 @@
 # Aufmaß
 
+> **Not maintained here any more (2026-11-06).** Aufmaß moved with its history
+> into the bauzertifikate.de platform repository, where development continues.
+> This repository is kept only for its releases: installed copies update from
+> them, and the download links below stay valid.
+
 Reads the DWG/DXF plans an architect sends and lists every wall, slab and roof
 with its quantities, as preparation for a cadwork model and an offer.
 
